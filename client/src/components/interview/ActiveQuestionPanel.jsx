@@ -13,6 +13,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  RotateCcw,
 } from 'lucide-react'
 import { isThoughtOrMetaPlanning } from '../../utils/questionNormalizer.js'
 
@@ -26,6 +27,7 @@ export default function ActiveQuestionPanel({
   isAiSpeaking = false,
   transcripts = [],
   candidateName = 'You',
+  onRepeatQuestion = null,
 }) {
   const [showSmsHistory, setShowSmsHistory] = useState(false)
   const chatScrollRef = useRef(null)
@@ -113,6 +115,21 @@ export default function ActiveQuestionPanel({
             <span className="text-xs font-sans font-medium text-slate-600 bg-slate-50 border border-slate-200/80 px-3 py-1 rounded-xl tracking-normal truncate max-w-[200px] shadow-2xs" title={criterionName}>
               Pillar: <strong className="font-semibold text-slate-800">{criterionName}</strong>
             </span>
+          )}
+
+          {onRepeatQuestion && roomStartupCountdown <= 0 && (
+            <button
+              type="button"
+              onClick={onRepeatQuestion}
+              disabled={isAiSpeaking}
+              className={`flex items-center gap-1.5 text-xs font-sans font-medium px-2.5 py-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition cursor-pointer shadow-2xs ${
+                isAiSpeaking ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-300 hover:text-blue-700'
+              }`}
+              title="Ask AI to repeat the question"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-blue-600" />
+              <span>Repeat Question</span>
+            </button>
           )}
 
           {filteredTranscripts.length > 0 && (

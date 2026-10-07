@@ -32,6 +32,90 @@ import ActiveQuestionPanel from '../components/interview/ActiveQuestionPanel.jsx
 import QuestionRenderer from '../components/interview/QuestionRenderer.jsx'
 import ConversationStream from '../components/interview/ConversationStream.jsx'
 
+/**
+ * Determines whether a question requires open-ended conversational voice/essay input.
+ * ONLY descriptive, short-answer, and behavioral questions keep the microphone unmuted by default.
+ * Multiple choice, coding, SQL, output, and boolean questions default the microphone to MUTED.
+ */
+function isLongFormVoiceQuestion(questionOrType) {
+  if (!questionOrType) return false
+  const t = typeof questionOrType === 'string'
+    ? questionOrType.toUpperCase()
+    : String(questionOrType.type || '').toUpperCase()
+  return ['DESCRIPTIVE', 'SHORT_ANSWER', 'BEHAVIORAL'].includes(t)
+}
+
+/**
+ * Recognizes conversational requests by the candidate to repeat or clarify the active question.
+ */
+function isRepeatQuestionRequest(text) {
+  if (!text || typeof text !== 'string') return false
+  const clean = text
+    .trim()
+    .toLowerCase()
+    .replace(/['’]/g, "'")
+    .replace(/[.,!?;:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (clean.length < 3 || clean.length > 90) return false
+
+  const exactPhrases = [
+    'repeat',
+    'repeat please',
+    'please repeat',
+    'repeat question',
+    'repeat the question',
+    'please repeat the question',
+    'can you repeat',
+    'can you repeat please',
+    'can you repeat that',
+    'can you repeat that please',
+    'can you repeat the question',
+    'can you repeat the question please',
+    'could you repeat',
+    'could you repeat please',
+    'could you repeat that',
+    'could you repeat that please',
+    'could you repeat the question',
+    'could you repeat the question please',
+    'would you repeat that',
+    'would you repeat the question',
+    'say that again',
+    'can you say that again',
+    'could you say that again',
+    'say that again please',
+    'pardon',
+    'pardon me',
+    'beg your pardon',
+    'come again',
+    'what was the question',
+    'what did you say',
+    'i didnt hear you',
+    "i didn't hear you",
+    'i didnt hear you well',
+    "i didn't hear you well",
+    'i could not hear you',
+    "i couldn't hear you",
+    "i didn't catch that",
+    'i didnt catch that',
+    'what is the question',
+  ]
+
+  if (exactPhrases.includes(clean)) return true
+
+  const patterns = [
+    /\b(can|could|would)\s+(you\s+)?(please\s+)?repeat(\s+that|\s+it|\s+the\s+question)?(\s+please)?\b/,
+    /\b(can|could|would)\s+(you\s+)?(please\s+)?say\s+that\s+again\b/,
+    /\b(please\s+)?repeat\s+(the\s+question|that|it)\b/,
+    /\b(i\s+)?(didn't|did\s+not|couldn't|could\s+not)\s+(hear|catch)\s+(you|that|it|the\s+question)\b/,
+    /\bwhat\s+(was|is)\s+the\s+question\b/,
+    /\b(can\s+you|could\s+you|please)\s+repeat\b/,
+  ]
+
+  return patterns.some((p) => p.test(clean))
+}
+
 export default function InterviewRoomPage() {
   const { token } = useParams()
   const navigate = useNavigate()
@@ -108,7 +192,7 @@ export default function InterviewRoomPage() {
   const lastScheduledTextRef = useRef('')
   const isCandidateTurnLockedRef = useRef(true)
   const lastTypingActivityTimeRef = useRef(0)
-  const autoMutedForCodingRef = useRef(false)
+  const autoMutedForNonDescriptiveRef = useRef(false)
   const liveAiSpeechStreamRef = useRef('')
 
   // 2-second warmup buffer after arriving in room before AI speaks
@@ -251,12 +335,21 @@ export default function InterviewRoomPage() {
       voiceEngineRef.current.resetCandidateSpeechRecognition()
     }
 
-    // Transition check: if new question is non-coding and previously auto-muted for coding, restore mic
+    // Question-type microphone gating:
+    // ONLY descriptive, short-answer, and behavioral questions keep microphone unmuted.
+    // Multiple-choice, code, SQL, output, and boolean questions default microphone to MUTED!
     const incomingType = normalized?.type || qObj?.type
-    const isNewCoding = ['CODE_WRITING', 'CODE_OUTPUT', 'SQL'].includes(incomingType)
-    if (!isNewCoding && autoMutedForCodingRef.current) {
-      console.log('[InterviewRoom] Transitioning to non-coding question. Restoring unmuted microphone.')
-      autoMutedForCodingRef.current = false
+    const isVoiceType = isLongFormVoiceQuestion(incomingType)
+    if (!isVoiceType) {
+      console.log(`[InterviewRoom] Non-descriptive question (${incomingType}). Defaulting microphone to MUTED.`)
+      autoMutedForNonDescriptiveRef.current = true
+      if (voiceEngineRef.current) {
+        voiceEngineRef.current.setMute(true)
+      }
+      setIsMuted(true)
+    } else if (autoMutedForNonDescriptiveRef.current) {
+      console.log('[InterviewRoom] Transitioning to descriptive question. Restoring unmuted microphone.')
+      autoMutedForNonDescriptiveRef.current = false
       if (voiceEngineRef.current) {
         voiceEngineRef.current.setMute(false)
       }
@@ -274,8 +367,8 @@ export default function InterviewRoomPage() {
       // If voice engine is explicitly not speaking aloud, unlock candidate after brief reading delay (1.5s)
       setTimeout(() => {
         isCandidateTurnLockedRef.current = false
-        if (isNewCoding) {
-          autoMutedForCodingRef.current = true
+        if (!isVoiceType) {
+          autoMutedForNonDescriptiveRef.current = true
           if (voiceEngineRef.current) voiceEngineRef.current.setMute(true)
           setIsMuted(true)
         } else {
@@ -443,7 +536,11 @@ export default function InterviewRoomPage() {
       // candidate turn is unlocked, and is not currently submitting:
       const recordedSpeech = (candidateSpeechBufferRef.current || candidateInterimText || '').trim()
       const timeSinceLastSpeech = Date.now() - (lastSpeechActivityTimeRef.current || 0)
+      const currentActiveQ = activeQuestionRef.current
+      const isVoiceQ = isLongFormVoiceQuestion(currentActiveQ)
+
       if (
+        isVoiceQ &&
         !isCandidateTurnLockedRef.current &&
         recordedSpeech.length >= 4 &&
         lastSpeechActivityTimeRef.current > 0 &&
@@ -452,6 +549,11 @@ export default function InterviewRoomPage() {
         !isCompleted &&
         voiceStateRef.current !== 'SPEAKING'
       ) {
+        if (isRepeatQuestionRequest(recordedSpeech)) {
+          console.log('[InterviewRoom] Pause watchdog intercepted repeat query:', recordedSpeech)
+          handleRepeatCurrentQuestion()
+          return
+        }
         console.log('[InterviewRoom] Pause watchdog triggered. Auto-submitting speech answer after 6.0s pause.')
         if (autoSubmitTimerRef.current) {
           clearTimeout(autoSubmitTimerRef.current)
@@ -593,6 +695,13 @@ export default function InterviewRoomPage() {
 
     if (!answerText || !currentSession?.id) return
 
+    // Intercept candidate repeat question queries so they never advance sequence or score as an answer!
+    if (isRepeatQuestionRequest(answerText)) {
+      console.log(`[InterviewRoom] handleSubmitAnswer intercepted repeat request: "${answerText}". Triggering repeat flow.`)
+      handleRepeatCurrentQuestion()
+      return
+    }
+
     const currentQSeq = typeof currentActiveQuestion?.sequence === 'number'
       ? currentActiveQuestion.sequence
       : (lastProcessedSequenceRef.current >= 0 ? lastProcessedSequenceRef.current : 0)
@@ -685,6 +794,46 @@ export default function InterviewRoomPage() {
 
   handleSubmitAnswerRef.current = handleSubmitAnswer
 
+  // Handle explicit or spoken request to repeat active question aloud
+  const handleRepeatCurrentQuestion = () => {
+    const currentQ = activeQuestionRef.current || activeQuestion
+    if (!currentQ) return
+
+    const rawPrompt =
+      currentQ.question_text || currentQ.prompt || currentQ.title || 'Please answer the active question.'
+    console.log('[InterviewRoom] Repeating active question aloud:', rawPrompt)
+
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current)
+      autoSubmitTimerRef.current = null
+    }
+    candidateSpeechBufferRef.current = ''
+    setCandidateInterimText('')
+    lastScheduledTextRef.current = ''
+    lastSpeechActivityTimeRef.current = 0
+
+    isCandidateTurnLockedRef.current = true
+    setVoiceState('SPEAKING')
+
+    const repeatPrompt = `Sure, let me repeat that: ${rawPrompt}`
+    setLiveAiSpeech(repeatPrompt)
+    liveAiSpeechStreamRef.current = ''
+
+    setTranscripts((prev) => [
+      ...prev,
+      {
+        id: `ai-repeat-${Date.now()}`,
+        speaker: 'AI',
+        content: `Sure, let me repeat that: "${rawPrompt}"`,
+        created_at: new Date().toISOString(),
+      },
+    ])
+
+    if (voiceEngineRef.current) {
+      voiceEngineRef.current.repeatAiQuestion(repeatPrompt)
+    }
+  }
+
   // Real-Time Voice Engine Lifecycle
   useEffect(() => {
     if (token && !isCompleted && !isLoading && session?.id) {
@@ -706,17 +855,24 @@ export default function InterviewRoomPage() {
             lastSpeechActivityTimeRef.current = 0
             lastScheduledTextRef.current = ''
 
-            // Auto-mute candidate microphone on coding/output questions so typing clatter & background sounds don't auto-submit!
+            // Auto-mute candidate microphone on non-descriptive questions (e.g. MCQ, coding, output)
             const currentQ = activeQuestionRef.current
-            const isCoding = ['CODE_WRITING', 'CODE_OUTPUT', 'SQL'].includes(currentQ?.type)
-            if (isCoding) {
-              console.log('[InterviewRoom] Coding question detected. Auto-muting microphone for quiet focus.')
-              autoMutedForCodingRef.current = true
+            const isVoiceQuestion = isLongFormVoiceQuestion(currentQ)
+            if (!isVoiceQuestion) {
+              console.log(`[InterviewRoom] Non-descriptive question (${currentQ?.type}). Auto-muting microphone by default.`)
+              autoMutedForNonDescriptiveRef.current = true
               if (voiceEngineRef.current) {
                 voiceEngineRef.current.setMute(true)
               }
               setIsMuted(true)
             } else {
+              if (autoMutedForNonDescriptiveRef.current) {
+                autoMutedForNonDescriptiveRef.current = false
+                if (voiceEngineRef.current) {
+                  voiceEngineRef.current.setMute(false)
+                }
+                setIsMuted(false)
+              }
               setVoiceState('LISTENING')
             }
           },
@@ -754,11 +910,35 @@ export default function InterviewRoomPage() {
             activeFullText = activeFullText.trim()
             if (!activeFullText) return
 
+            // 0. Candidate repetition request:
+            if (isRepeatQuestionRequest(activeFullText)) {
+              console.log(`[InterviewRoom] Candidate asked to repeat question: "${activeFullText}". Triggering repeat flow.`)
+              if (autoSubmitTimerRef.current) {
+                clearTimeout(autoSubmitTimerRef.current)
+                autoSubmitTimerRef.current = null
+              }
+              candidateSpeechBufferRef.current = ''
+              setCandidateInterimText('')
+              lastScheduledTextRef.current = ''
+              lastSpeechActivityTimeRef.current = 0
+
+              handleRepeatCurrentQuestion()
+              return
+            }
+
             // 1. Single voice recording box: immediately reflect speech in candidate voice response box
             setCandidateInterimText(activeFullText)
             lastSpeechActivityTimeRef.current = Date.now()
 
             // 2. High-responsiveness silence detection & auto-submit:
+            // STRICT REQUIREMENT: Only auto-submit voice answers for DESCRIPTIVE, SHORT_ANSWER, or BEHAVIORAL questions!
+            // Multiple-choice, code, SQL, output, and boolean questions MUST NOT auto-submit on background sounds!
+            const currentQ = activeQuestionRef.current
+            const isVoiceQuestion = isLongFormVoiceQuestion(currentQ)
+            if (!isVoiceQuestion) {
+              return
+            }
+
             const prevText = lastScheduledTextRef.current || ''
             const hasGrown = activeFullText.length > prevText.length + 3
 
@@ -887,7 +1067,7 @@ export default function InterviewRoomPage() {
   }, [token, isCompleted, isLoading, Boolean(session?.id)])
 
   const handleToggleMute = () => {
-    autoMutedForCodingRef.current = false
+    autoMutedForNonDescriptiveRef.current = false
     if (voiceEngineRef.current) {
       const muted = voiceEngineRef.current.toggleMute()
       setIsMuted(muted)
@@ -1259,6 +1439,7 @@ export default function InterviewRoomPage() {
                 isAiSpeaking={voiceState === 'SPEAKING'}
                 transcripts={transcripts}
                 candidateName={candidate?.full_name || 'You'}
+                onRepeatQuestion={handleRepeatCurrentQuestion}
               />
 
               {/* Dynamic Interaction Area */}

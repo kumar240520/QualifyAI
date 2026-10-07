@@ -7,6 +7,7 @@ import {
   isQuestionSequenceNewer,
   parseInterviewDurationMinutes,
   validateActiveQuestionAnswer,
+  isRepeatQuestionRequest,
 } from '../src/services/interview/interviewState.js'
 import { shouldAcceptQuestionEvent } from '../../client/src/utils/questionEvent.js'
 
@@ -240,3 +241,24 @@ test('question diversity policy enforces varied types and normalizes interactive
   })
   assert.equal(convertedDecision.question.type, 'SCENARIO', 'Second consecutive descriptive question must be converted to SCENARIO to eliminate essay burden')
 })
+
+test('candidate repeat queries are recognized accurately and do not advance or burn questions', () => {
+  // Positive matches
+  assert.equal(isRepeatQuestionRequest('can you repeat please'), true)
+  assert.equal(isRepeatQuestionRequest('Could you please repeat that?'), true)
+  assert.equal(isRepeatQuestionRequest('Can you repeat the question?'), true)
+  assert.equal(isRepeatQuestionRequest('repeat please'), true)
+  assert.equal(isRepeatQuestionRequest('pardon me'), true)
+  assert.equal(isRepeatQuestionRequest("I didn't hear you well"), true)
+  assert.equal(isRepeatQuestionRequest('can you say that again'), true)
+  assert.equal(isRepeatQuestionRequest('what was the question'), true)
+
+  // Negative matches (real technical answers)
+  assert.equal(isRepeatQuestionRequest('In JavaScript we use Array.prototype.map and filter to transform lists.'), false)
+  assert.equal(isRepeatQuestionRequest('Option B'), false)
+  assert.equal(isRepeatQuestionRequest('The time complexity is O(N log N) because we sort the elements.'), false)
+  assert.equal(isRepeatQuestionRequest('SELECT * FROM users WHERE status = active;'), false)
+  assert.equal(isRepeatQuestionRequest(''), false)
+  assert.equal(isRepeatQuestionRequest(null), false)
+})
+

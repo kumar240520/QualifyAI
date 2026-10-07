@@ -165,7 +165,7 @@ export class VoiceGateway {
   /**
    * Deliver spoken audio turn directly to candidate for a given session
    */
-  async speakPromptToSession(sessionIdOrInterviewId, textToSpeak) {
+  async speakPromptToSession(sessionIdOrInterviewId, textToSpeak, force = false) {
     if (!textToSpeak) return
 
     for (const [ws, ctx] of this.activeSessions.entries()) {
@@ -176,8 +176,8 @@ export class VoiceGateway {
         const cleanPrompt = textToSpeak.trim()
         if (!cleanPrompt) continue
 
-        // Deduplication guard: ignore identical prompts delivered within 8 seconds to prevent reading the question twice!
-        if (ctx.lastSpokenText === cleanPrompt && (Date.now() - (ctx.lastSpokenTime || 0)) < 8000) {
+        // Deduplication guard: ignore identical prompts delivered within 8 seconds unless forced (e.g. repeat request)
+        if (!force && ctx.lastSpokenText === cleanPrompt && (Date.now() - (ctx.lastSpokenTime || 0)) < 8000) {
           console.log(`[VoiceGateway] Deduplicating identical spoken prompt within 8s for ${ctx.candidateName}: "${cleanPrompt.substring(0, 40)}..."`)
           return
         }
@@ -385,11 +385,13 @@ export class VoiceGateway {
               break
             }
 
+            case 'repeat_question':
             case 'speak_question': {
               if (packet.text) {
                 const textToSpeak = packet.text.trim()
                 if (!textToSpeak) break
-                this.speakPromptToSession(ctx.sessionId, textToSpeak)
+                const isForce = packet.type === 'repeat_question' || Boolean(packet.force)
+                this.speakPromptToSession(ctx.sessionId, textToSpeak, isForce)
               }
               break
             }

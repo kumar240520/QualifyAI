@@ -5,7 +5,7 @@ import { rubricService } from '../rubricService.js'
 import { realtimeQuestionGenerator } from './realtimeQuestionGenerator.js'
 import { getVoiceGateway } from '../voice/voiceGateway.js'
 import { randomUUID } from 'node:crypto'
-import { validateActiveQuestionAnswer, parseInterviewDurationMinutes, createAnswerCommit } from './interviewState.js'
+import { validateActiveQuestionAnswer, parseInterviewDurationMinutes, createAnswerCommit, isRepeatQuestionRequest } from './interviewState.js'
 
 const sessionDeadlineTimers = new Map()
 const activeTurnPromises = new Map()
@@ -709,6 +709,42 @@ export const interviewEngineService = {
         token,
         answerText,
       })
+    }
+
+    // 3.5. CANDIDATE REPEAT REQUEST HANDLING:
+    // If candidate asked the AI to repeat the question, DO NOT advance or commit an answer!
+    if (isRepeatQuestionRequest(answerText)) {
+      console.log(`[InterviewEngine] Candidate requested to repeat active question #${currentSeq} for session ${session.id}.`)
+      const activeQ = activeQuestion || meta.current_question
+      const rawPrompt = activeQ?.question_text || activeQ?.prompt || ''
+      const repeatLeadIn = `Sure, let me repeat that: ${rawPrompt}`
+
+      try {
+        const gateway = getVoiceGateway()
+        if (gateway) {
+          gateway.speakPromptToSession(session.id, repeatLeadIn, true)
+        }
+      } catch (voiceErr) {
+        console.warn('[InterviewEngine] Failed to deliver repeated prompt via voice gateway:', voiceErr.message)
+      }
+
+      return {
+        isRepeat: true,
+        isCompleted: false,
+        sequence: currentSeq,
+        nextQuestion: {
+          ...activeQ,
+          spoken_lead_in: repeatLeadIn,
+        },
+        remainingSeconds: timeCheck.remainingSeconds,
+        session: {
+          id: session.id,
+          interview_id: interview.id,
+          status: interview.status,
+          session_metadata: meta,
+        },
+        coverageMatrix: meta.coverage_matrix,
+      }
     }
 
     // 4. Mark sequence as answered in session metadata

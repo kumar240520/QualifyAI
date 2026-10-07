@@ -724,15 +724,16 @@ export class VoiceInterviewEngine {
   /**
    * Speak newly generated real-time AI question and options aloud
    */
-  speakAiQuestion(spokenText) {
+  speakAiQuestion(spokenText, force = false) {
     if (!spokenText || this.isStopped) return
 
     // 1. If WebSocket is connected, request Voice Gateway to deliver the prompt
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(
         JSON.stringify({
-          type: 'speak_question',
+          type: force ? 'repeat_question' : 'speak_question',
           text: spokenText,
+          force,
         })
       )
       return
@@ -763,6 +764,13 @@ export class VoiceInterviewEngine {
         console.warn('[VoiceEngine] speakAiQuestion speech error:', err)
       }
     }
+  }
+
+  /**
+   * Request Voice Gateway or browser engine to explicitly repeat the active question aloud
+   */
+  repeatAiQuestion(spokenText) {
+    return this.speakAiQuestion(spokenText, true)
   }
 
   /**
