@@ -44,7 +44,7 @@ const INTEGRITY_CARDS = [
 
 export default function IntegritySection() {
   return (
-    <section className="py-24 bg-gradient-to-b from-slate-50/80 via-white to-slate-50/80 border-b border-slate-200/80 relative overflow-hidden">
+    <section id="integrity" className="py-24 bg-gradient-to-b from-slate-50/80 via-white to-slate-50/80 border-b border-slate-200/80 relative overflow-hidden">
       {/* Background Radar Sweep Animation */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] pointer-events-none opacity-20 -z-10">
         <div className="w-full h-full rounded-full border border-cyan-500/30 flex items-center justify-center">

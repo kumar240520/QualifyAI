@@ -1,5 +1,6 @@
 import React from 'react'
 import Navbar from '../components/landing/Navbar.jsx'
+import LandingChapterRail from '../components/navigation/LandingChapterRail.jsx'
 import HeroSection from '../components/landing/HeroSection.jsx'
 import TrustStrip from '../components/landing/TrustStrip.jsx'
 import ProblemSection from '../components/landing/ProblemSection.jsx'
@@ -16,14 +17,17 @@ import MetricsSection from '../components/landing/MetricsSection.jsx'
 import CTASection from '../components/landing/CTASection.jsx'
 import Footer from '../components/landing/Footer.jsx'
 
-export default function LandingPage({ onOpenDemo }) {
+export default function LandingPage({ onOpenAuth }) {
   return (
     <div className="min-h-screen bg-white text-slate-900 font-sans selection:bg-blue-500 selection:text-white">
       {/* 1. Header / Navbar */}
-      <Navbar onOpenDemo={onOpenDemo} />
+      <Navbar onOpenAuth={onOpenAuth} />
+
+      {/* Floating Left Chapter Sidebar Navigation Rail */}
+      <LandingChapterRail />
 
       {/* 2. Hero Section */}
-      <HeroSection onOpenDemo={onOpenDemo} />
+      <HeroSection onOpenAuth={onOpenAuth} />
 
       {/* 3. Section 2: Trust & Capability Indicator Strip */}
       <TrustStrip />
@@ -35,12 +39,12 @@ export default function LandingPage({ onOpenDemo }) {
       <WorkflowSection />
 
       {/* 6. Section 5: Dual-Sided Platform (Recruiter vs Candidate) */}
-      <DualSidedSection onOpenDemo={onOpenDemo} />
+      <DualSidedSection onOpenAuth={onOpenAuth} />
 
       {/* 7. Section 6: Deep Dive: JD Intelligence & Calibrated Rubric */}
       <JdIntelligenceSection />
 
-      {/* 8. Section 7: Real-Time AI Voice Engine & Adaptive Simulator */}
+      {/* 8. Section 7: Real-Time AI Voice Engine */}
       <VoiceEngineSection />
 
       {/* 9. Section 8: Assessment & Multi-Dimensional Scorecard */}
@@ -53,7 +57,7 @@ export default function LandingPage({ onOpenDemo }) {
       <LeaderboardSection />
 
       {/* 12. Section 11: Candidate Diagnostic Report */}
-      <DiagnosticReportSection onOpenDemo={onOpenDemo} />
+      <DiagnosticReportSection onOpenAuth={onOpenAuth} />
 
       {/* 13. Section 12: Technology Architecture & Enterprise Security */}
       <TechSecuritySection />
@@ -62,7 +66,7 @@ export default function LandingPage({ onOpenDemo }) {
       <MetricsSection />
 
       {/* 15. Section 14: Final Call To Action */}
-      <CTASection onOpenDemo={onOpenDemo} />
+      <CTASection onOpenAuth={onOpenAuth} />
 
       {/* 16. Footer */}
       <Footer />

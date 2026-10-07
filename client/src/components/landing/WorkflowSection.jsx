@@ -144,7 +144,7 @@ export default function WorkflowSection() {
 
     const getNavbarHeight = () => {
       const header = document.querySelector('header')
-      return header ? header.offsetHeight : 80
+      return header ? Math.min(header.offsetHeight, 48) : 40
     }
 
     const snapToSection = (smooth = true) => {
@@ -492,7 +492,7 @@ export default function WorkflowSection() {
     <section
       ref={sectionRef}
       id="workflow"
-      className="scroll-mt-20 min-h-[calc(100vh-80px)] py-10 lg:py-14 bg-gradient-to-b from-white via-slate-50/60 to-white border-b border-slate-200/80 bg-grid-pattern relative overflow-hidden flex flex-col justify-center"
+      className="scroll-mt-4 pt-1 sm:pt-2 pb-14 lg:pb-16 bg-gradient-to-b from-white via-slate-50/60 to-white border-b border-slate-200/80 bg-grid-pattern relative overflow-hidden flex flex-col"
     >
       {/* Parallax Ambient Orbs */}
       <div className="absolute top-1/4 right-0 w-[500px] h-[500px] bg-cyan-200/20 blur-3xl -z-10 rounded-full animate-float-slow pointer-events-none" />
@@ -502,7 +502,7 @@ export default function WorkflowSection() {
       <div className="relative z-10 w-full">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Section Header */}
-          <div className="text-center max-w-3xl mx-auto mb-6 sm:mb-8 space-y-2.5">
+          <div className="text-center max-w-3xl mx-auto mb-4 sm:mb-6 space-y-2">
             <div className="inline-flex items-center gap-2 px-4 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-bold uppercase tracking-wider shadow-xs">
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
               END-TO-END ORCHESTRATION PIPELINE

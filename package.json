@@ -3,9 +3,16 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "dev": "npm --prefix client run dev",
+    "dev": "concurrently -k -n \"SERVER,CLIENT\" -c \"cyan.bold,magenta.bold\" \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "start": "concurrently -k -n \"SERVER,CLIENT\" -c \"cyan.bold,magenta.bold\" \"npm --prefix server start\" \"npm --prefix client run dev\"",
     "build": "npm --prefix client run build",
     "client:dev": "npm --prefix client run dev",
-    "client:build": "npm --prefix client run build"
+    "client:build": "npm --prefix client run build",
+    "server:dev": "npm --prefix server run dev",
+    "server:start": "npm --prefix server start",
+    "server:install": "npm --prefix server install"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
   }
 }

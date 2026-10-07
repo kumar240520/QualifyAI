@@ -103,7 +103,7 @@ export default function LeaderboardSection() {
   }
 
   return (
-    <section className="py-24 bg-gradient-to-b from-white via-slate-50/60 to-white border-b border-slate-200/80 relative overflow-hidden bg-dot-pattern">
+    <section id="leaderboard" className="py-24 bg-gradient-to-b from-white via-slate-50/60 to-white border-b border-slate-200/80 relative overflow-hidden bg-dot-pattern">
       {/* Background Ambient Orbs */}
       <div className="absolute top-1/3 left-10 w-96 h-96 bg-cyan-200/20 blur-3xl -z-10 rounded-full animate-float-slow pointer-events-none" />
       <div className="absolute bottom-10 right-10 w-96 h-96 bg-indigo-200/20 blur-3xl -z-10 rounded-full animate-float-reverse-slow pointer-events-none" />

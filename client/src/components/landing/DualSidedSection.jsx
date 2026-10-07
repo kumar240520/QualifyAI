@@ -44,7 +44,7 @@ const CANDIDATE_BULLETS = [
   },
 ]
 
-export default function DualSidedSection({ onOpenDemo }) {
+export default function DualSidedSection({ onOpenAuth }) {
   const [flipped, setFlipped] = useState(false)
 
   return (
@@ -156,19 +156,19 @@ export default function DualSidedSection({ onOpenDemo }) {
             <div>
               {!flipped ? (
                 <button
-                  onClick={onOpenDemo}
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-semibold text-sm shadow-xl shadow-cyan-600/25 transition-all transform hover:-translate-y-0.5"
+                  onClick={() => onOpenAuth?.('signup')}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-semibold text-sm shadow-xl shadow-cyan-600/25 transition-all transform hover:-translate-y-0.5 cursor-pointer"
                 >
-                  Explore Recruiter Console
+                  <span>Explore Recruiter Console</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               ) : (
                 <button
-                  onClick={onOpenDemo}
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold text-sm shadow-xl shadow-indigo-600/25 transition-all transform hover:-translate-y-0.5"
+                  onClick={() => onOpenAuth?.('signup')}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold text-sm shadow-xl shadow-indigo-600/25 transition-all transform hover:-translate-y-0.5 cursor-pointer"
                 >
-                  Start Free Candidate Practice
-                  <Mic className="w-4 h-4 text-cyan-200" />
+                  <span>Start Candidate Assessment</span>
+                  <ArrowRight className="w-4 h-4 text-cyan-200" />
                 </button>
               )}
             </div>

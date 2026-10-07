@@ -3,7 +3,7 @@ import { Rocket, ArrowRight, Mic, Calendar, Sparkles, ShieldCheck, Zap, Headphon
 import BorderGlow from '../common/BorderGlow.jsx'
 import RotatingText from '../common/RotatingText.jsx'
 
-export default function CTASection({ onOpenDemo }) {
+export default function CTASection({ onOpenAuth }) {
   return (
     <section id="cta" className="py-28 relative overflow-hidden bg-gradient-to-b from-slate-50 via-cyan-50/40 to-blue-50/40 border-b border-slate-200/80 bg-aurora">
       {/* Background ambient decorative glow */}
@@ -64,31 +64,31 @@ export default function CTASection({ onOpenDemo }) {
           {/* Buttons */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
             <button
-              onClick={onOpenDemo}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold text-sm shadow-xl shadow-blue-500/25 transition-all transform hover:-translate-y-1 hover:shadow-2xl"
+              onClick={() => onOpenAuth?.('signup')}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold text-sm shadow-xl shadow-blue-500/25 transition-all transform hover:-translate-y-1 hover:shadow-2xl cursor-pointer"
             >
-              Screen Candidates with AI
+              <span>Create Free Organization Account</span>
               <ArrowRight className="w-4 h-4" />
             </button>
 
             <button
-              onClick={onOpenDemo}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-7 py-4 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 font-semibold text-sm shadow-sm transition-all hover:border-slate-300 transform hover:-translate-y-0.5"
+              onClick={() => onOpenAuth?.('login')}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-7 py-4 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 font-semibold text-sm shadow-sm transition-all hover:border-slate-300 transform hover:-translate-y-0.5 cursor-pointer"
             >
-              <Mic className="w-4 h-4 text-blue-600" />
-              Try Candidate Mock Interview
+              <span>Sign In to Workspace</span>
+              <ArrowRight className="w-4 h-4 text-blue-600" />
             </button>
           </div>
 
           {/* Calendar Link */}
           <div className="pt-4 flex flex-wrap items-center justify-center gap-2 text-xs sm:text-sm text-slate-600 font-medium">
             <Calendar className="w-4 h-4 text-slate-500" />
-            <span>Need a custom enterprise rollout?</span>
+            <span>Need an enterprise recruitment workspace?</span>
             <button
-              onClick={onOpenDemo}
-              className="text-blue-600 hover:text-blue-700 font-semibold underline underline-offset-4"
+              onClick={() => onOpenAuth?.('signup')}
+              className="text-blue-600 hover:text-blue-700 font-semibold underline underline-offset-4 cursor-pointer"
             >
-              Book a private demo with our architecture team
+              Sign up for an enterprise account
             </button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 # QualifyAI
 
-> **Enterprise AI-Powered Technical Recruitment and Interview Assessment SaaS Platform**
+> **Enterprise AI-Powered Technical Recruitment & Conversational Voice Assessment Platform**
 
 QualifyAI is an enterprise-grade, dual-sided technical hiring platform that connects Job Description (JD) intelligence with conversational AI voice interviewing, automated multi-dimensional technical evaluation, and candidate integrity analytics.
 
@@ -8,151 +8,192 @@ QualifyAI is an enterprise-grade, dual-sided technical hiring platform that conn
 
 ## 1. Product Overview
 
-QualifyAI bridges the gap between hiring organizations and technical candidates by automating the initial technical screening and deep competency interviews with voice-based AI interviewers.
+QualifyAI bridges the gap between hiring organizations and technical candidates by replacing manual, biased, unstandardized preliminary phone screens with autonomous, calibrated AI voice interviews.
 
 ```
-Job Description Upload
+Job Description Upload (PDF / DOCX / Text)
          ↓
-Intelligent JD Parsing
+Intelligent JD Parsing & Skill Extraction
          ↓
-Requirement & Skill Extraction
+Role-Specific Rubric Synthesis (0–100 Multi-Dimensional)
          ↓
-Role-Specific Rubric Generation
+Targeted Question Pool Generation
          ↓
-Adaptive Question Generation
+Candidate Invitation & Hardware Check (Mic / Speaker / Network)
          ↓
-Candidate Invitation & Scheduling
-         ↓
-AI Real-Time Voice Interview
-    ├── Low-Latency Audio Streaming
-    ├── Speech-to-Text (STT via Deepgram)
-    ├── LLM Reasoning & Adaptive Probing (OpenAI / Gemini)
-    └── Text-to-Speech Synthesis (TTS via ElevenLabs)
+AI Real-Time Voice Interview (Turnaround Latency ≤ 1500ms)
+    ├── Continuous Binary Audio Streaming (WebSockets)
+    ├── AI Orchestration Layer (`AIOrchestrator` Rate Limiting & State Management)
+    ├── Primary AI Engine: Google Gemini (`@google/genai` with model fallback chain)
+    └── Optional Plug-and-Play Adapters (Deepgram, OpenAI, ElevenLabs)
          ↓
 Multi-Dimensional Evaluation & Scoring
-    ├── Technical Correctness & Depth
-    ├── Problem Solving & Architecture
-    └── Communication Clarity
+    ├── Technical Correctness & Systems Depth (Cited Transcript Quotes)
+    ├── Problem-Solving & Architecture Decomposition
+    └── Communication Clarity (WPM & Filler Word Density)
          ↓
-Interview Integrity & Proctoring Analytics
+Interview Integrity & Proctoring Analytics (Focus Loss & Acoustic Anomaly Logs)
          ↓
-Comprehensive Candidate Diagnostic Report & PDF
-         ↓
-Recruiter Dashboard & Comparative Candidate Ranking
+Reports & Actionable Intelligence
+    ├── Candidate Diagnostic Growth Report (Verified Strengths & Audio Feedback)
+    └── Recruiter Cohort Leaderboard & Executive PDF Scorecard
 ```
 
 ---
 
-## 2. Core Capabilities
+## 2. Core Platform Capabilities
 
-- **Multi-Tenant SaaS Architecture**: Strict tenant isolation across organizations, departments, and roles.
-- **Intelligent JD Parser**: Automatic extraction of core competencies, programming languages, system design requirements, and seniority expectations.
-- **Dynamic Rubric Generation**: Role-tailored scoring benchmarks generated directly from verified job requirements.
-- **Adaptive AI Voice Interviewing**: Natural, low-latency, conversational voice interviews that adapt in real time to candidate answers with technical follow-ups.
-- **Explainable Multi-Dimensional Evaluation**: Quantitative and qualitative scoring grounded strictly in the generated rubric.
-- **Interview Integrity Monitoring**: Acoustic anomaly detection, tab-switch monitoring, and focus-loss tracking without invasive or pseudoscientific facial scoring.
-- **Executive & Candidate Reports**: In-depth diagnostic summaries, candidate growth feedback, and recruiter ranking dashboards.
+- **Multi-Tenant SaaS Architecture**: Strict tenant isolation across organizations, departments, and roles enforced at both application and PostgreSQL Row Level Security (RLS) layers.
+- **Intelligent JD Parser**: Automatic extraction of core competencies, programming languages, system design requirements, and seniority tiers into structured JSON schemas.
+- **Dynamic Rubric Generation**: Role-tailored scoring benchmarks (Novice 1, Competent 3, Mastery 5) generated directly from verified job requirements.
+- **Adaptive AI Voice Interviewing**: Natural, low-latency, conversational voice interviews that adapt in real time to candidate answers with clarifying follow-ups.
+- **Explainable Multi-Dimensional Evaluation**: Quantitative and qualitative scoring (0–100 scale) grounded strictly in the generated rubric and verified by transcript citations.
+- **Ethical Integrity Monitoring**: Acoustic anomaly detection, tab-switch monitoring, and focus-loss tracking without invasive or pseudoscientific facial/emotion scoring.
+- **Dual-Sided Reporting**: In-depth diagnostic growth summaries for candidates and comparative cohort ranking dashboards for recruiters.
 
 ---
 
 ## 3. Technology Stack
 
-| Layer | Technology | Description |
+| Layer | Technology | Purpose & Description |
 | :--- | :--- | :--- |
-| **Frontend** | React / Next.js, Tailwind CSS | Modular component architecture, Web Audio API, responsive UI |
-| **Backend** | Node.js, Express | Layered clean architecture, REST APIs |
-| **Real-Time Audio** | WebSockets / Socket.io | Binary audio streaming, low-latency duplex session orchestration |
-| **Database** | PostgreSQL, Prisma ORM | Relational schema, migrations, tenant-scoped querying |
-| **Authentication** | Supabase Auth, JWT | Role-based access control (Admin, Recruiter, Candidate) |
+| **Frontend Client** | React 19, Vite 8, Tailwind CSS v3, Framer Motion | 3-tier experience (Public, Recruiter, Candidate), Web Audio API, responsive UI |
+| **Backend Server** | Node.js, Express | Layered clean architecture, modular monolith, REST APIs |
+| **Real-Time Audio** | WebSockets (`ws`) | Binary audio streaming, low-latency duplex session orchestration |
+| **Database** | PostgreSQL 17 (Supabase) | 21-table normalized schema, migrations, RLS policies |
+| **Authentication** | Supabase Auth, JWT | Role-based access control (`ORG_ADMIN`, `RECRUITER`, `REVIEWER`, `CANDIDATE`) |
 | **Background Processing** | Redis, BullMQ | Asynchronous JD parsing, post-interview evaluations, report compilation |
-| **Speech-to-Text (STT)** | Deepgram | Real-time WebSocket streaming transcription |
-| **LLM Reasoning** | OpenAI / Google Gemini | Rubric generation, question synthesis, adaptive interview dialogue |
-| **Text-to-Speech (TTS)** | ElevenLabs | Low-latency natural conversational voice synthesis |
-| **Storage** | Logical Storage Layer / Supabase Storage | Encrypted storage for resumes, recordings, reports, and transcripts |
+| **Primary AI Provider** | Google Gemini (`@google/genai`) | JD parsing, rubric synthesis, adaptive interview reasoning, answer analysis, scoring |
+| **AI Orchestration** | `AIOrchestrator` & `AIProvider` | Rate limiting, token optimization, high-availability model fallback chain, caching |
+| **Optional Adapters** | Deepgram Nova-2 / ElevenLabs / OpenAI | Optional modular plugins adhering to `AIProvider` contract |
+| **Storage** | Logical Storage / Supabase Storage | Encrypted storage for resumes, recordings, reports, and transcripts |
 
 ---
 
 ## 4. Repository Structure
 
-QualifyAI maintains a clean, modular repository organization:
-
 ```
 QUALIFYAI/
 │
 ├── README.md                  # Project overview and development entry point
-├── prd.md                     # Product Requirements Document (Source of Truth)
-├── architecture.md            # Technical & System Architecture (Source of Truth)
-├── design.md                  # Design System & UX Standards (Source of Truth)
-├── memory.md                  # Living Project State & Decision Log
+├── prd.md                     # Product Requirements Document (Permanent Source of Truth)
+├── architecture.md            # Technical & System Architecture (Permanent Source of Truth)
+├── design.md                  # Design System & UX Standards (Permanent Source of Truth)
+├── memory.md                  # Living Project State & Architectural Decision Log
 ├── phases.md                  # Authoritative Development Roadmap & Milestones
-├── rules.md                   # Permanent Engineering Rules & Invariants
+├── rules.md                   # Permanent Engineering Rules & Security Invariants
 │
-├── client/                    # Frontend client application
+├── client/                    # Frontend client application (React 19 + Vite + Tailwind)
 │   ├── public/                # Static public assets
-│   └── src/                   # Client source code (domain-oriented)
+│   └── src/                   # Client source code
 │       ├── assets/            # Static media, icons, and illustrations
-│       ├── components/        # Reusable UI component library
+│       ├── components/        # Reusable UI component library (design system & landing)
 │       ├── layouts/           # Page shell layouts (Recruiter, Candidate, Public)
-│       ├── pages/             # Route-level page views
+│       ├── pages/             # Route-level page views (LandingPage, Dashboard, etc.)
 │       ├── routes/            # Route configuration and navigation guards
 │       ├── services/          # HTTP API client services
 │       ├── hooks/             # Custom React hooks (audio, websockets, auth)
-│       ├── context/           # React context providers (Auth, Interview state)
-│       ├── lib/               # Third-party wrappers and client utilities
-│       ├── constants/         # Client configuration constants
-│       ├── utils/             # Pure utility functions
-│       └── styles/            # Global styles and Tailwind configuration
+│       ├── context/           # React context providers (Auth, Organization state)
+│       ├── lib/               # Utility functions and library configurations
+│       ├── constants/         # UI constants and route definitions
+│       ├── utils/             # Formatting, timing, and audio math helpers
+│       └── styles/            # Global styles and design tokens
 │
-├── server/                    # Backend API and real-time engine
-│   └── src/                   # Server source code (layered architecture)
-│       ├── config/            # Environment and infrastructure configurations
-│       ├── constants/         # System constants and error codes
-│       ├── middleware/        # Auth, tenant scoping, error, and rate-limiting middleware
-│       ├── routes/            # HTTP and WebSocket route definitions
-│       ├── controllers/       # HTTP request/response boundary handlers
+├── server/                    # Backend server application (Node.js + Express)
+│   └── src/                   # Server source code
+│       ├── config/            # Environment and service configurations
+│       ├── constants/         # Application constants and error codes
+│       ├── controllers/       # HTTP request handlers
+│       ├── integrations/      # Isolated third-party adapters (Deepgram, LLM, ElevenLabs, Supabase)
+│       ├── middleware/        # Auth, tenant context, rate limiting, error handling
+│       ├── modules/           # Domain modules (jdIntelligence, rubricEngine, aiInterview, etc.)
+│       ├── routes/            # Express route declarations
 │       ├── services/          # Core domain business logic
-│       ├── validators/        # Request payload schema validators
-│       ├── integrations/      # Third-party SDK boundaries (Deepgram, OpenAI, ElevenLabs)
-│       ├── modules/           # Self-contained domain modules
-│       └── utils/             # Helper utilities and loggers
+│       ├── utils/             # Cryptographic tokens, audio math, logger helpers
+│       └── validators/        # Declarative schema validators (Zod / Joi)
 │
-├── storage/                   # Logical storage management layer
-│   ├── resumes/               # Candidate uploaded resumes
-│   ├── job-descriptions/      # Parsed and original JD files
-│   ├── interview-recordings/  # Audio session recordings
-│   ├── transcripts/           # Raw and annotated interview transcripts
-│   ├── reports/               # Generated candidate evaluation PDFs
-│   ├── candidate-documents/   # Additional candidate submitted verification files
-│   ├── organization-assets/   # Recruiter company logos and branding assets
-│   └── temp/                  # Ephemeral processing storage
+├── storage/                   # Logical application storage layer
+│   ├── candidate-documents/   # Candidate uploaded supplementary materials
+│   ├── interview-recordings/  # Raw binary audio session recordings (.webm)
+│   ├── job-descriptions/      # Uploaded job description source documents
+│   ├── organization-assets/   # Employer brand assets and logos
+│   ├── reports/               # Generated executive evaluation reports (PDF)
+│   ├── resumes/               # Ingested candidate resumes (PDF, DOCX)
+│   ├── temp/                  # Ephemeral upload processing sandbox
+│   └── transcripts/           # Immutable interview conversation records (JSON)
 │
-├── document/                  # Formal project specifications and reference artifacts
+├── document/                  # Formal Foundation Specifications Archive
+│   ├── DOCUMENT 1.pdf         # Product & Functional Blueprint (37 pages)
+│   ├── DOCUMENT 2.pdf         # Full Technical Implementation Plan (45 pages)
+│   ├── DOCUMENT 3.pdf         # Complete Web App Frontend Blueprint (34 pages)
+│   ├── DOCUMENT 4.pdf         # Software Architecture & Development Structure (43 pages)
+│   ├── DOCUMENT 5.pdf         # Database Architecture & Security Model (37 pages)
+│   └── DOCUMENT 6.pdf         # Project Documentation & Reference Structure (28 pages)
 │
-└── docs/                      # Supporting engineering documentation and diagrams
+└── docs/                      # Living Engineering & Supporting Technical Documentation
+    ├── README.md              # Living documentation index and contribution guide
+    ├── api/                   # REST API specifications and OpenAPI contracts
+    ├── database/              # Schema references, ER diagrams, and migration guides
+    ├── ai/                    # Prompt engineering templates, VAD benchmarks, latency logs
+    ├── interview/             # Real-time state machine and audio streaming protocols
+    ├── security/              # Multi-tenant RLS guides and encryption specifications
+    └── deployment/            # Docker, CI/CD, and infrastructure configurations
 ```
 
 ---
 
-## 5. Architectural Principles
+## 5. Documentation Source-of-Truth Hierarchy
 
-1. **Source of Truth Hierarchy**: The seven root Markdown files (`README.md`, `prd.md`, `architecture.md`, `design.md`, `memory.md`, `phases.md`, `rules.md`) are the authoritative governance documents.
-2. **Provider Isolation**: Third-party AI providers (Deepgram, OpenAI/Gemini, ElevenLabs) are strictly encapsulated behind integration adapter interfaces in `server/src/integrations/`. No provider SDK leaks into domain services.
-3. **Multi-Tenant Isolation**: Every database query, storage path, and business transaction is isolated by `organizationId`. Cross-tenant data leakage is prohibited.
-4. **Ethical Evaluation Focus**: Proctoring measures focus exclusively on technical reasoning, communication clarity, tab-focus integrity, and acoustic anomalies. **Facial micro-expression or emotion scoring is strictly prohibited.**
-5. **No Premature Microservices**: QualifyAI is built as a clean, modular monolith with distinct domains, ensuring high developer velocity while maintaining clear boundaries for future scaling.
+As defined in **Document 6**, QualifyAI enforces a 3-layer documentation governance model:
+
+1. **Root Source of Truth (Permanent)**:
+   - [`prd.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/prd.md): Functional and product requirements.
+   - [`architecture.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/architecture.md): System, audio, and database architecture.
+   - [`design.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/design.md): UX standards, route structure, and design system.
+   - [`rules.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/rules.md): Engineering invariants and security rules.
+   - [`phases.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/phases.md): Development roadmap and phase deliverables.
+   - [`memory.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/memory.md): Living state log and architectural decisions.
+   - [`MEETING_ROOM_IMPLEMENTATION_SPEC.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/MEETING_ROOM_IMPLEMENTATION_SPEC.md): Authoritative real-time AI meeting room specification, question engine, voice streaming, and proctoring.
+2. **Formal Foundation Specifications Archive (`document/`)**:
+   - Immutable baseline blueprints ([`DOCUMENT 1.pdf`](file:///d:/JAVA%20WEBDEV/QualifyAI/document/DOCUMENT%201.pdf) through [`DOCUMENT 6.pdf`](file:///d:/JAVA%20WEBDEV/QualifyAI/document/DOCUMENT%206.pdf), 224 total pages). See [`document/README.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/document/README.md).
+3. **Living Engineering Documentation (`docs/`)**:
+   - Technical specifications, API references, and runbooks under active maintenance. See [`docs/README.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/README.md).
 
 ---
 
-## 6. Development Workflow & Status
+## 6. Getting Started
 
-- **Current Phase**: **Phase 0: Architecture & Repository Initialization** (Completed)
-- **Next Phase**: **Phase 1: Foundation, Multi-Tenancy & Authentication**
-- See [`phases.md`](./phases.md) for detailed milestone breakdowns and exit criteria.
-- Consult [`rules.md`](./rules.md) for mandatory engineering rules before writing any code.
-- Check [`memory.md`](./memory.md) for the active implementation state and architectural decisions.
+### Prerequisites
+- **Node.js**: v20.x or higher
+- **npm**: v10.x or higher
+- **PostgreSQL / Supabase**: Active Supabase project instance
+
+### Quickstart
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Run both Server (API + WebSockets) & Client together at once
+npm run dev
+# Starts simultaneously:
+# - Express API Gateway + Gemini AI + WebSocket Server on http://localhost:5000 (ws://localhost:5000/ws/voice-interview)
+# - React Vite Client SPA on http://localhost:3000
+```
 
 ---
 
-## 7. License & Confidentiality
+## 7. Quality Assurance & System Verification
 
-QualifyAI is an enterprise SaaS platform. All proprietary rights, system designs, and intellectual property remain reserved.
+QualifyAI has been subjected to a complete, non-mocked End-to-End integration test and quality audit across all tiers (Frontend, Backend, Database, Auth, AI, WebSockets, Proctoring, Evaluations, and Leaderboards).
+
+- **Master E2E Test Suite**: `scratch/test-master-e2e-suite.js` (36 of 36 gates passed — 100% success rate).
+- **Comprehensive Audit Reports**:
+  1. [`docs/testing/COMPLETE_TEST_PLAN.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/testing/COMPLETE_TEST_PLAN.md) — Master test plan and 36-gate test matrix.
+  2. [`docs/testing/E2E_TEST_RESULTS.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/testing/E2E_TEST_RESULTS.md) — End-to-end execution results across Golden Paths 1 & 2.
+  3. [`docs/testing/INTEGRATION_TEST_RESULTS.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/testing/INTEGRATION_TEST_RESULTS.md) — Cross-tier integration and protocol verification.
+  4. [`docs/testing/SECURITY_TEST_RESULTS.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/testing/SECURITY_TEST_RESULTS.md) — Multi-tenant isolation, Rule 7 compliance, and penetration tests.
+  5. [`docs/testing/AI_TEST_RESULTS.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/testing/AI_TEST_RESULTS.md) — Gemini model validation, schema enforcement, and benchmark metrics.
+  6. [`docs/testing/PERFORMANCE_TEST_RESULTS.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/testing/PERFORMANCE_TEST_RESULTS.md) — End-to-end latency benchmarks and memory profiles.
+  7. [`docs/testing/BUG_FIX_REPORT.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/testing/BUG_FIX_REPORT.md) — 8 defects diagnosed, corrected, and regression verified.
+  8. [`docs/testing/FINAL_SYSTEM_ACCEPTANCE.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/testing/FINAL_SYSTEM_ACCEPTANCE.md) — Formal release certification (v1.2.0).
+

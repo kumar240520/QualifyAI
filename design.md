@@ -1,149 +1,170 @@
-# Design System & UX Standards Document — QualifyAI
+# Design System & User Experience (UX) Blueprint — QualifyAI
 
 **Document Status:** Approved / Source of Truth  
 **Target Platform:** QualifyAI Enterprise SaaS  
-**Document Version:** 1.0.0  
+**Document Version:** 1.1.0 (Fully Synchronized with Foundation Documents 1–6)  
 
 ---
 
-## 1. Design Philosophy & Aesthetic Vision
+## 1. Design Philosophy & Aesthetic Core
 
-QualifyAI delivers a **dual-personality interface**:
-1. **Recruiter & Enterprise Workspace**: Clean, high-density, authoritative, and data-rich. Designed for rapid decision-making, frictionless job management, and deep comparative candidate analytics.
-2. **Candidate Interview Arena**: Calming, minimalist, distraction-free, and psychologically reassuring. Designed to alleviate test anxiety, build confidence, and provide clear audio-visual cues during voice dialogue.
+QualifyAI delivers a **clean, modern, authoritative, and low-cognitive-load** user experience. The aesthetic balances enterprise credibility with the dynamism of conversational AI.
 
-### Core Visual Principles
-- **Modern Polish**: Refined glassmorphism, subtle micro-borders (`border-white/10`), depth layering via directional shadows, and tailored HSL color tokens.
-- **Dynamic Liveness**: Fluid, 60fps animations for voice activity, audio spectrum visualizers, state transitions, and responsive feedback.
-- **Ethical & Transparent Tone**: Clear visual indicators when audio is recording, active transcript preview, and unambiguous status indicators.
+1. **Enterprise Authority**: Crisp geometry, subtle borders, high contrast ratios, and restrained accent gradients inspire trust among enterprise talent acquisition leaders and engineering directors.
+2. **Stress-Minimizing Candidate Experience**: The candidate interview environment is distraction-free, calming, and focused. It avoids intimidating proctoring overlays, replacing them with clear audio indicators and transparent status badges.
+3. **Information Density with Hierarchy**: Recruiter dashboards prioritize quick scannability, utilizing status badges, multi-dimensional radar charts, and compact data tables.
+4. **Rich Micro-Interactions**: Split-flap typography, glowing border proximity states, smooth tilt effects, and real-time audio waveform animations create a tactile, state-of-the-art first impression.
 
 ---
 
-## 2. Color System & Design Tokens
+## 2. Three-Tier Experience Model (from Document 3)
 
-QualifyAI utilizes an **HSL-tailored, dark-mode first design system** with a complementary clean light mode for daytime enterprise use.
-
-### 2.1 Dark Mode Palette (Primary Theme)
-
-| Token Name | HSL Value | Hex Equivalent | Usage |
-| :--- | :--- | :--- | :--- |
-| `--background` | `hsl(224, 71%, 4%)` | `#030712` | Root page background |
-| `--surface` | `hsl(222, 47%, 11%)` | `#0f172a` | Cards, panels, modal dialogs |
-| `--surface-elevated`| `hsl(217, 33%, 17%)` | `#1e293b` | Dropdowns, hover states, active rows |
-| `--border` | `hsl(215, 28%, 20%)` | `#27354a` | Subtle container borders |
-| `--primary` | `hsl(250, 84%, 60%)` | `#6366f1` | Primary CTA, active accents, brand violet |
-| `--primary-glow` | `hsla(250, 84%, 60%, 0.25)` | N/A | Ambient glow for audio visualizer orb |
-| `--secondary` | `hsl(199, 89%, 48%)` | `#0ea5e9` | Secondary actions, technical tags, cyan |
-| `--accent` | `hsl(262, 83%, 58%)` | `#8b5cf6` | Highlight gradients, AI reasoning state |
-| `--success` | `hsl(142, 71%, 45%)` | `#22c55e` | Passing scores, hardware verified, online |
-| `--warning` | `hsl(38, 92%, 50%)` | `#f59e0b` | Mid scores, proctoring flags, cautionary alerts |
-| `--error` | `hsl(0, 84%, 60%)` | `#ef4444` | High integrity risk, failed audio check, errors |
-| `--text-primary` | `hsl(210, 40%, 98%)` | `#f8fafc` | Headings, high-emphasis text |
-| `--text-secondary` | `hsl(215, 20%, 65%)` | `#94a3b8` | Subtext, labels, metadata |
-| `--text-muted` | `hsl(215, 16%, 47%)` | `#64748b` | Disabled items, timestamp captions |
-
----
-
-## 3. Typography Hierarchy
-
-The typography combines a clean modern geometric sans-serif for UI clarity with a precision monospaced font for code, transcripts, and technical data.
-
-- **Primary Typeface**: `Inter`, `-apple-system`, `BlinkMacSystemFont`, `Segoe UI`, `Roboto`, `sans-serif`
-- **Headings & Accents**: `Outfit`, `Inter`, `sans-serif`
-- **Technical & Code**: `JetBrains Mono`, `Fira Code`, `monospace`
-
-### Type Scale
-
-| Style | Size | Line Height | Weight | Tracking | Usage |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Display** | 3.0rem (48px) | 1.15 | Bold (700) | -0.025em | Landing hero, final score display |
-| **Heading 1**| 2.25rem (36px) | 1.2 | Bold (700) | -0.02em | Page headers, interview title |
-| **Heading 2**| 1.5rem (24px) | 1.3 | SemiBold (600) | -0.015em | Card headers, section dividers |
-| **Heading 3**| 1.125rem (18px)| 1.4 | SemiBold (600) | -0.01em | Modal titles, category headers |
-| **Body Large**| 1.0rem (16px) | 1.5 | Regular (400) / Medium (500) | Normal | Question text, candidate answers |
-| **Body Small**| 0.875rem (14px)| 1.5 | Regular (400) / Medium (500) | Normal | Table rows, input fields, descriptions |
-| **Caption** | 0.75rem (12px) | 1.4 | Medium (500) | +0.02em | Timestamps, tags, badges, footnotes |
-
----
-
-## 4. Spacing & Layout Grid
-
-- **Baseline Grid**: Built on an **8-point grid** (4px half-steps for micro-alignment).
-  - Micro: `4px` (`0.25rem`), `8px` (`0.5rem`), `12px` (`0.75rem`)
-  - Standard: `16px` (`1rem`), `24px` (`1.5rem`), `32px` (`2rem`)
-  - Macro: `48px` (`3rem`), `64px` (`4rem`), `96px` (`6rem`)
-- **Containers**:
-  - Compact: `max-w-3xl` (Hardware check, single question forms)
-  - Standard Content: `max-w-5xl` (Candidate report, job creation wizard)
-  - Full-Width Dashboard: `max-w-7xl` or fluid with responsive sidebars
-
----
-
-## 5. Persona-Specific UX Design Standards
-
-### 5.1 Recruiter & Admin Workspace
-- **High Information Density**: Tables with sortable columns, inline status badges, filter chips, and bulk action drawers.
-- **Candidate Score Cards**:
-  - Large overall match index (`0–100`) with color-coded confidence halos (Green: ≥80, Amber: 60–79, Red: <60).
-  - Visual breakdown: Technical Accuracy bar, Architecture/Depth bar, Communication bar.
-  - Collapsible transcript viewer with synchronized audio playback scrubbers.
-- **Rubric Configurator**: Interactive category sliders with immediate weight normalization.
-
-### 5.2 Candidate Interview Arena
-- **Pre-Flight System Check Screen**:
-  - Interactive mic level meter: Live audio visualizer confirming candidate microphone is responsive before joining.
-  - Headphone/Speaker test: One-click chime test to guarantee candidate can hear the AI interviewer.
-  - Clear, calming checklist: Camera-free policy explicitly stated ("We evaluate your technical thoughts, not your facial expressions").
-- **Active Interview Room**:
-  - Central conversational visualizer: Ambient glowing orb / spectrum visualizer responding to voice dynamics.
-  - Status Pills: Distinct badges for `AI Speaking`, `Listening to You`, `Reasoning...`.
-  - Live Transcript Drawer: Optional candidate-toggled caption drawer for accessibility.
-  - End Interview Guard: Safe two-step exit confirmation to prevent accidental session termination.
-
----
-
-## 6. Interview Voice State Machine & Visualizer Specs
-
-The central interview visualizer communicates system state through fluid CSS and WebGL/Canvas micro-animations:
+The application frontend is structured into three distinct experience portals:
 
 ```
-[CONNECTING] ────────► [AI SPEAKING] ────────► [LISTENING] ────────► [THINKING]
-   (Pulse)            (Waveform / Violet)      (Breath / Cyan)       (Orbit / Accent)
-      │                                                                  │
-      └───────────────────────────◄──────────────────────────────────────┘
+QUALIFYAI CLIENT
+│
+├── 1. PUBLIC EXPERIENCE
+│   ├── Landing Page (`/`)
+│   ├── Interactive Mock Demo Sandbox (`/demo`)
+│   ├── Authentication: Login / Signup (`/auth/login`, `/auth/signup`)
+│   └── Password Reset & Callback (`/auth/reset-password`, `/auth/callback`)
+│
+├── 2. RECRUITER PLATFORM
+│   ├── Recruiter Dashboard (`/dashboard`)
+│   ├── Job Requisition Management (`/jobs`)
+│   ├── Create Job & JD Parser UI (`/jobs/create`)
+│   ├── Job Rubric & Question Editor (`/jobs/:jobId/rubric`)
+│   ├── Candidate Cohort Leaderboard (`/jobs/:jobId/candidates`)
+│   ├── Multi-Dimensional Scorecard View (`/interviews/:interviewId/scorecard`)
+│   ├── Executive Report & PDF Export (`/reports/:interviewId`)
+│   └── Organization Settings & Team Seats (`/settings`)
+│
+└── 3. CANDIDATE PORTAL
+    ├── Tokenized Invitation Landing (`/interview/:token`)
+    ├── Automated Hardware Check (`/interview/check`)
+    ├── AI Voice Interview Room (`/interview/room`)
+    └── Candidate Diagnostic Growth Report (`/feedback/:token`)
 ```
 
-| State | Visual Behavior | Color Token | Audio Energy Source |
-| :--- | :--- | :--- | :--- |
-| **Connecting / Ready** | Subtle rhythmic breathing glow (1.5s period) | `--text-muted` | None |
-| **AI Speaking** | Dynamic harmonic waveform or glowing orb pulsing with incoming TTS audio amplitude | `--primary` & `--secondary` | Server TTS stream audio stream energy |
-| **Candidate Listening** | Responsive soundwave ring reacting in real time to candidate mic input | `--secondary` (`#0ea5e9`) | Web Audio API AnalyserNode (`frequencyData`) |
-| **AI Thinking** | Gentle swirling orbital ring indicating prompt evaluation & turn formulation | `--accent` (`#8b5cf6`) | None (smooth CSS rotation) |
-| **Network Warning** | Amber perimeter pulse with "Reconnecting audio stream..." banner | `--warning` (`#f59e0b`) | Ping/pong telemetry delay |
+---
+
+## 3. Route Hierarchy & Navigation Architecture
+
+```mermaid
+graph TD
+    Root["/"] --> Landing["Landing Page"]
+    Root --> Demo["/demo (Interactive Mock Sandbox)"]
+    Root --> Auth["/auth/*"]
+    Auth --> Login["/auth/login"]
+    Auth --> Signup["/auth/signup"]
+    
+    subgraph Recruiter Portal (Guarded by RecruiterLayout)
+        Dashboard["/dashboard (Executive Overview)"]
+        Jobs["/jobs (Requisitions List)"]
+        CreateJob["/jobs/create (JD Input & Parsing)"]
+        JobDetail["/jobs/:jobId (Cohort Overview)"]
+        Scorecard["/interviews/:id/scorecard (Multi-dimensional Review)"]
+        Report["/reports/:id (Executive PDF Report)"]
+        Settings["/settings (Organization & Team)"]
+    end
+    
+    subgraph Candidate Portal (Guarded by CandidateLayout)
+        InviteEntry["/interview/:token (Token Validation)"]
+        HardwareCheck["/interview/check (Mic & Speaker Diagnostic)"]
+        InterviewRoom["/interview/room (AI Voice Dialogue)"]
+        DiagnosticReport["/feedback/:token (Growth Feedback & Audio)"]
+    end
+```
 
 ---
 
-## 7. Component Library Design Tokens & Primitives
+## 4. Typography System
 
-All components must strictly adhere to shared atomic primitives:
+The typography scale combines structural legibility with distinct expressive roles:
 
-- **Button Primitives**:
-  - `Primary`: Solid violet gradient (`bg-indigo-600 hover:bg-indigo-500`), subtle top inner highlight, white text.
-  - `Secondary`: Translucent surface (`bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700`).
-  - `Danger`: Subtle crimson alert (`bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20`).
-- **Cards & Containers**:
-  - Background: `bg-slate-900/60 backdrop-blur-md`
-  - Border: `border border-slate-800`
-  - Radius: `rounded-xl` (`12px`) or `rounded-2xl` (`16px`)
-- **Metric Badges**:
-  - Pills with leading dot indicators (`rounded-full px-2.5 py-0.5 text-xs font-medium`).
+- **Display & Section Headings**: `Outfit` (sans-serif, weights 600, 700, 800) — Bold, geometric, modern character.
+- **Body & Interface Text**: `Inter` (sans-serif, weights 400, 500, 600) — High x-height, exceptional legibility at small sizes.
+- **Code, Metrics & Telemetry**: `JetBrains Mono` (monospace, weights 400, 500, 700) — Score tags, timestamps, WPM, and JSON schemas.
+
+```css
+/* Typography Scale */
+--font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+--font-heading: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+```
 
 ---
 
-## 8. Accessibility & Responsiveness (WCAG 2.1 AA)
+## 5. Color Palette & Design Tokens
 
-- **Color Contrast**: All text elements maintain a minimum contrast ratio of 4.5:1 against their backgrounds (7:1 for headings).
-- **Keyboard Navigation**: Complete keyboard navigability with visible focus rings (`focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2`).
-- **Screen Reader Support**: ARIA live regions (`aria-live="polite"`) broadcast AI speaking states and interview progress indicators.
-- **Motion Reduction**: All visualizer animations and orbital rings respect `@media (prefers-reduced-motion: reduce)` by falling back to static status indicators.
-- **Device Support**: Mobile and tablet responsiveness for recruiter monitoring; desktop/laptop optimization for candidate interviews (requiring reliable microphone input).
+Tailored HSL color tokens provide dynamic dark/light surface adaptation with curated accent harmonies:
+
+### 5.1 Primary Brand Palettes
+- **Deep Slate (Surface & Text)**:
+  - Background Light: `hsl(210 40% 98%)`
+  - Card Surface: `hsl(0 0% 100%)`
+  - Border Subdued: `hsl(214 32% 91%)`
+  - Text Primary: `hsl(222 47% 11%)`
+  - Text Muted: `hsl(215 16% 47%)`
+- **Electric Blue (Primary Brand)**:
+  - Blue 600: `hsl(221 83% 53%)` / `#2563eb`
+  - Blue 500: `hsl(217 91% 60%)` / `#3b82f6`
+  - Blue Glow: `hsl(217 91% 60% / 20%)`
+- **Cyan & Indigo (AI & Intelligence Accents)**:
+  - Cyan 500: `hsl(188 86% 53%)` / `#06b6d4`
+  - Indigo 600: `hsl(243 75% 59%)` / `#4f46e5`
+
+### 5.2 Status & Scoring Indicators
+- **Emerald (Verified Strengths / High Score)**: `hsl(160 84% 39%)` / `#059669` (Score 80–100)
+- **Amber (Growth Area / Moderate Score)**: `hsl(38 92% 50%)` / `#d97706` (Score 60–79)
+- **Rose (Integrity Flag / Critical Gap)**: `hsl(350 89% 60%)` / `#e11d48` (Score < 60)
+
+---
+
+## 6. Real-Time Audio Visualizer States (from Document 3)
+
+The Candidate Interview Room (`/interview/room`) features a central responsive voice waveform indicator reflecting the active conversation state:
+
+```
+┌────────────────────────────────────────────────────────┐
+│                   QUALIFYAI INTERVIEW                  │
+│                                                        │
+│                     ┌───────────┐                      │
+│                     │  (( • ))  │                      │
+│                     │  WAVEFORM │                      │
+│                     └───────────┘                      │
+│                [AI Speaking / Listening]               │
+│                                                        │
+│  "Explain how you would handle write amplification..." │
+│                                                        │
+│  [ Mic Active ]     [ Audio: OK ]     [ Ping: 24ms ]   │
+└────────────────────────────────────────────────────────┘
+```
+
+1. **`IDLE`**: Subtle, pulsating ambient glow; baseline sine wave oscillation.
+2. **`LISTENING`**: Dynamic multi-bar equalizer reacting to candidate microphone input energy (0–100% volume RMS).
+3. **`THINKING`**: Circular revolving orbit animation indicating LLM prompt reasoning and response generation.
+4. **`AI_SPEAKING`**: Smooth, rhythmic acoustic waveform synchronized to streaming ElevenLabs audio chunks.
+
+---
+
+## 7. Component Library & Micro-Interactions
+
+1. **`SplitFlapText`**: Retro mechanical split-flap display tile animation for dynamic heading transitions.
+2. **`BorderGlow`**: Cursor-proximity reactive gradient border illumination utilizing HSL color cones.
+3. **`FlipCard`**: 3D perspective flip card comparing Recruiter features with Candidate benefits.
+4. **`TiltCard`**: Parallax 3D mouse tracking card with glare highlight.
+5. **`RotatingText`**: Smooth morphing keyword carousel for landing page value propositions.
+6. **`CountUp`**: Smooth numerical score and percentage counter triggered on viewport intersection.
+
+---
+
+## 8. Responsive Design & Accessibility Standards
+
+- **Breakpoints**: Mobile (`< 640px`), Tablet (`640px - 1024px`), Desktop (`> 1024px`), Wide (`> 1440px`).
+- **WCAG 2.1 AA Compliance**:
+  - Minimum contrast ratio of 4.5:1 for body text, 3:1 for large display text.
+  - Full keyboard navigability across all interactive elements (`tabindex`, focus rings).
+  - Explicit `aria-live` announcements for real-time AI conversation turns.
+  - Respect `prefers-reduced-motion` media queries for accessibility.

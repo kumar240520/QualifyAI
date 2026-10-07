@@ -62,7 +62,7 @@ export default function ProblemSection() {
   const [activeTab, setActiveTab] = useState('with') // 'before' | 'with'
 
   return (
-    <section className="py-24 bg-gradient-to-b from-white via-slate-50/70 to-white relative overflow-hidden bg-dot-pattern">
+    <section id="problem" className="pt-20 pb-10 bg-gradient-to-b from-white via-slate-50/70 to-white relative overflow-hidden bg-dot-pattern">
       {/* Parallax Floating Ambient Mesh Orbs */}
       <div className="absolute top-10 left-10 w-96 h-96 bg-rose-200/25 blur-3xl -z-10 rounded-full animate-float-slow pointer-events-none" />
       <div className="absolute bottom-10 right-10 w-96 h-96 bg-indigo-200/25 blur-3xl -z-10 rounded-full animate-float-reverse-slow pointer-events-none" />

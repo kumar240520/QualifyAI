@@ -1,29 +1,36 @@
-# Technical Documentation Workspace (`docs/`) — QualifyAI
+# Living Engineering Documentation (`docs/`) — QualifyAI
 
-This directory is the **supporting engineering documentation workspace** for QualifyAI.
+This directory is the **supporting engineering documentation workspace** for QualifyAI. It houses deep-dive technical guides, API contracts, sequence diagrams, and operational runbooks.
 
 ---
 
-## 1. Distinction from Root Markdown Files
+## 1. Documentation Layering & Governance (from Document 6)
 
-| Location | Purpose | Governance |
+| Layer | Location | Purpose & Governance |
 | :--- | :--- | :--- |
-| **Project Root (`/`)** | **Permanent Sources of Truth** (`README.md`, `prd.md`, `architecture.md`, `design.md`, `memory.md`, `phases.md`, `rules.md`) | Authoritative platform specifications and engineering invariants. Never move into `docs/`. |
-| **`docs/`** | **Supporting Technical Documentation** (Implementation guides, API endpoint references, sequence diagrams, benchmark results, setup guides). | Living technical notes, design drill-downs, and developer references. |
-| **`document/`** | **Formal Project Artifacts** (Product briefs, compliance documents, external RFP responses, whitepapers). | Formal institutional documents separate from technical engineering notes. |
+| **Root Source of Truth** | `/` (Project Root) | **Seven Permanent Source-of-Truth Documents**: [`README.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/README.md), [`prd.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/prd.md), [`architecture.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/architecture.md), [`design.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/design.md), [`memory.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/memory.md), [`phases.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/phases.md), [`rules.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/rules.md). Never move into `docs/`. |
+| **Living Engineering Docs** | `docs/` | **Detailed Implementation Notes & Guides**: Specialized deep dives, API specs, database schemas, and audio benchmarks under active development. |
+| **Formal Foundation Specs** | `document/` | **Formal Foundation Specifications Archive**: High-level, approved institutional blueprints ([`DOCUMENT 1.pdf`](file:///d:/JAVA%20WEBDEV/QualifyAI/document/DOCUMENT%201.pdf) through [`DOCUMENT 6.pdf`](file:///d:/JAVA%20WEBDEV/QualifyAI/document/DOCUMENT%206.pdf), 224 total pages). |
 
 ---
 
-## 2. Planned Subsections for `docs/`
+## 2. Planned Subsections for `docs/` (as specified in Document 6)
 
-As the implementation progresses, supporting documentation will be added here:
+As the platform evolves through its development phases, supporting engineering guides will be organized into these eight domains:
 
-- `docs/api/`: REST API schemas, OpenAPI/Swagger specifications, and WebSocket protocol definitions.
-- `docs/audio-pipeline/`: Deep-dive guides on audio chunking, Web Audio API Worklets, latency optimization, and VAD configuration.
-- `docs/evaluations/`: Rubric generation prompts, scoring formulas, and evaluation audit trails.
-- `docs/deployment/`: Production deployment runbooks, Docker configurations, and infrastructure guides.
+1. **`docs/api/`**: REST API endpoints, request/response schemas, OpenAPI/Swagger contracts, and WebSocket payload protocols.
+2. **`docs/ai/`**: Prompt engineering templates, LLM reasoning pipelines, VAD benchmarks, and turnaround latency profiles.
+3. **`docs/database/`**: Schema drill-downs, ER diagrams, foreign-key cascade maps, index benchmarks, and PostgreSQL RLS policy guides.
+4. **`docs/interview/`**: Real-time state machine diagrams, Web Audio API audio chunking, and turn-taking orchestration. See [`MEETING_ROOM_SPEC.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/docs/interview/MEETING_ROOM_SPEC.md) and [`MEETING_ROOM_IMPLEMENTATION_SPEC.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/MEETING_ROOM_IMPLEMENTATION_SPEC.md).
+5. **`docs/security/`**: Multi-tenant defense-in-depth, JWT verification flows, signed storage URL enforcement, and threat mitigation.
+6. **`docs/deployment/`**: Docker containerization, CI/CD pipeline automation, environment configurations, and production runbooks.
+7. **`docs/integrations/`**: Third-party adapter specifications for Deepgram Nova-2, OpenAI GPT-4o, Google Gemini, ElevenLabs, and Supabase.
+8. **`docs/development/`**: Local developer onboarding, coding conventions, test execution suites, and Git workflows.
 
 ---
 
-## 3. Governance Rule
-Do NOT move the seven root Markdown files into this directory. Keep all supporting guides aligned with the root architecture documents.
+## 3. Governance Rules
+
+1. **Alignment with Root Documents**: Content in `docs/` must remain in strict alignment with [`architecture.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/architecture.md), [`prd.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/prd.md), and [`rules.md`](file:///d:/JAVA%20WEBDEV/QualifyAI/rules.md).
+2. **No Duplication of Source Code**: Technical guides should explain architecture, data flows, and constraints without copying complete source files.
+3. **Root Markdown Invariance**: The seven permanent root documents must never be moved into or replaced by files in `docs/`.

@@ -13,12 +13,13 @@ import {
   Code2,
   Zap,
   ShieldCheck,
+  LogIn,
 } from 'lucide-react'
 import heroIllustration from '../../assets/hero-illustration.png'
 import BorderGlow from '../common/BorderGlow.jsx'
 import SplitFlapText from '../common/SplitFlapText.jsx'
 
-export default function HeroSection({ onOpenDemo }) {
+export default function HeroSection({ onOpenAuth }) {
   const [selectedPersona, setSelectedPersona] = useState('recruiter')
   const [waveMeter, setWaveMeter] = useState([30, 65, 95, 45, 85, 100, 75, 50, 90, 40])
 
@@ -42,7 +43,7 @@ export default function HeroSection({ onOpenDemo }) {
   }, [])
 
   return (
-    <section className="relative pt-16 pb-24 overflow-hidden bg-gradient-to-b from-slate-50 via-white to-slate-50/80 border-b border-slate-200/60 bg-grid-pattern">
+    <section id="hero" className="relative pt-16 pb-24 overflow-hidden bg-gradient-to-b from-slate-50 via-white to-slate-50/80 border-b border-slate-200/60 bg-grid-pattern">
       {/* Parallax Floating Ambient Mesh Orbs */}
       <div className="absolute top-12 left-1/4 w-[600px] h-[350px] bg-gradient-to-tr from-blue-300/30 via-indigo-300/20 to-cyan-300/30 blur-3xl -z-10 rounded-full animate-float pointer-events-none" />
       <div className="absolute top-1/3 right-10 w-[500px] h-[320px] bg-gradient-to-tr from-cyan-300/30 via-blue-200/20 to-purple-300/20 blur-3xl -z-10 rounded-full animate-float-reverse pointer-events-none" />
@@ -83,20 +84,20 @@ export default function HeroSection({ onOpenDemo }) {
 
             {/* CTAs */}
             <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-4 pt-2">
-              <a
-                href="#cta"
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 text-white font-semibold text-sm shadow-xl shadow-blue-500/30 transition-all transform hover:-translate-y-1 hover:shadow-2xl hover:shadow-blue-500/40"
+              <button
+                onClick={() => onOpenAuth?.('signup')}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 text-white font-semibold text-sm shadow-xl shadow-blue-500/30 transition-all transform hover:-translate-y-1 hover:shadow-2xl hover:shadow-blue-500/40 cursor-pointer"
               >
-                Start Screening Candidates
+                <span>Start Screening Candidates</span>
                 <ArrowRight className="w-4 h-4" />
-              </a>
+              </button>
 
               <button
-                onClick={onOpenDemo}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-7 py-4 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 hover:border-blue-300 text-slate-800 font-semibold text-sm shadow-sm hover:shadow-md transition-all transform hover:-translate-y-0.5"
+                onClick={() => onOpenAuth?.('login')}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-7 py-4 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 hover:border-blue-300 text-slate-800 font-semibold text-sm shadow-sm hover:shadow-md transition-all transform hover:-translate-y-0.5 cursor-pointer"
               >
-                <Volume2 className="w-4 h-4 text-blue-600" />
-                Try an AI Practice Interview
+                <LogIn className="w-4 h-4 text-blue-600" />
+                <span>Sign In to Workspace</span>
               </button>
             </div>
 
