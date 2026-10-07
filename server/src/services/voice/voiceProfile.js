@@ -15,14 +15,13 @@ export const VOICE_PROFILES = {
     pace: 'natural',
     expressiveness: 'high',
     formality: 'professional',
-    geminiVoice: 'Aoede', // Top-rated natural, warm conversational voice in Gemini Live
+    geminiVoice: 'Aoede',
     kokoroVoice: 'af_heart', // Top-rated natural Grade A conversational voice in Kokoro
     geminiModel: 'models/gemini-2.5-flash-native-audio-latest',
     fallbackModels: [
       'models/gemini-2.5-flash-native-audio-preview-12-2025',
       'models/gemini-3.1-flash-live-preview',
     ],
-    sampleRate: 24000,
   },
   michael_recruiter: {
     id: 'michael_recruiter',
@@ -42,7 +41,6 @@ export const VOICE_PROFILES = {
       'models/gemini-2.5-flash-native-audio-preview-12-2025',
       'models/gemini-3.1-flash-live-preview',
     ],
-    sampleRate: 24000,
   },
   kore_recruiter: {
     id: 'kore_recruiter',
@@ -61,7 +59,6 @@ export const VOICE_PROFILES = {
     fallbackModels: [
       'models/gemini-2.5-flash-native-audio-preview-12-2025',
     ],
-    sampleRate: 24000,
   },
 }
 

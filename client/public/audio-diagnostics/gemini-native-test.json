@@ -1,0 +1,3104 @@
+{
+  "model": "models/gemini-2.5-flash-native-audio-latest",
+  "voiceName": "Aoede",
+  "prompt": "I noticed you built a route planning project. What was the most difficult technical decision you made, and how did you evaluate the result?",
+  "transcript": "I noticed you built a route planning project. What was the most difficult technical decision you made, and how did you evaluate the result?",
+  "capture": {
+    "durationMs": 9142
+  },
+  "runtimeMessages": [
+    {
+      "receivedAt": 1791387320540,
+      "topLevelKeys": [
+        "setupComplete"
+      ],
+      "serverContentKeys": [],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387321205,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387321466,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387321671,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321672,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321723,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321723,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321724,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387321724,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321724,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321725,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321725,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321725,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321725,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321725,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321725,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321725,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321726,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321726,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321726,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387321726,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321726,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321726,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321726,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321795,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321795,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321795,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321800,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321800,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387321801,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321801,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321805,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321868,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321868,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321868,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321868,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321868,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321869,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321883,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321937,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321937,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321938,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321938,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321938,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321992,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321992,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387321992,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387321992,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322001,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322001,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322005,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322043,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322044,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322044,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322044,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322098,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322099,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322099,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322149,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322150,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322150,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322150,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387322150,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322150,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322153,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322166,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322166,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387322242,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322242,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322242,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322242,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322242,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322242,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322242,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322251,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322263,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322287,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322287,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322295,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322308,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322308,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387322333,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322333,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322342,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322359,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322367,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322376,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322393,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322397,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322411,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322428,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322459,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322459,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322459,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322471,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322479,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322479,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387322507,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322507,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322516,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322534,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322542,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322551,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322564,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322573,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322585,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322609,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322609,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322618,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322636,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322636,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387322648,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322649,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322667,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322684,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322691,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322704,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322705,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322718,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322742,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322743,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322753,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322753,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387322782,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322783,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322799,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322816,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322824,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322840,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322876,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322881,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322881,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322881,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322901,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322901,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322910,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322927,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322927,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387322937,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322954,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322954,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322977,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322977,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387322995,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323012,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323012,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323029,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323038,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323048,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323058,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323058,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387323067,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323087,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323093,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323106,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323115,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323140,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323140,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323164,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323168,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387323168,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323178,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323182,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323219,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323219,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323219,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323224,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323237,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323251,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323257,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323269,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323282,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323312,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323316,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323317,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323329,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323329,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "outputTranscription"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387323335,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323343,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323370,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323374,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323385,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323415,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323415,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323415,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323422,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323445,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323445,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323454,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323466,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323493,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323493,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323525,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323525,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323525,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323550,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323550,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "modelTurn"
+      ],
+      "partKeys": [
+        [
+          "inlineData"
+        ]
+      ]
+    },
+    {
+      "receivedAt": 1791387323568,
+      "topLevelKeys": [
+        "serverContent"
+      ],
+      "serverContentKeys": [
+        "generationComplete"
+      ],
+      "partKeys": []
+    },
+    {
+      "receivedAt": 1791387329681,
+      "topLevelKeys": [
+        "serverContent",
+        "usageMetadata"
+      ],
+      "serverContentKeys": [
+        "turnComplete"
+      ],
+      "partKeys": []
+    }
+  ],
+  "mimeTypes": [
+    "audio/pcm;rate=24000"
+  ],
+  "sampleRates": [
+    24000
+  ],
+  "channels": 1,
+  "channelsEvidence": "Gemini Live raw audio protocol expectation; inlineData contains no channel metadata.",
+  "bitDepth": 16,
+  "bitDepthEvidence": "Gemini Live raw audio protocol expectation; inlineData contains no sample-width metadata.",
+  "byteOrder": "little-endian",
+  "byteOrderEvidence": "Gemini Live raw audio protocol expectation.",
+  "container": "raw PCM in Gemini inlineData; no audio container headers observed",
+  "chunkCount": 180,
+  "base64CharactersByChunk": [
+    61440,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560,
+    2560
+  ],
+  "bytesByChunk": [
+    46080,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920,
+    1920
+  ],
+  "bytesTotal": 389760,
+  "completeFrames": 194880,
+  "trailingBytes": 0,
+  "estimatedDurationSeconds": 8.12,
+  "sha256": "20ba90e87d5cbe75e7c7d6ede8a0dd3515297ac02a5ca72b17fc7824ec73664e",
+  "generatedAt": "2026-10-07T15:35:29.694Z"
+}

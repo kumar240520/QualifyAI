@@ -31,6 +31,16 @@ export const answerAnalyzer = {
     const expectedConcepts = question?.metadata?.expected_concepts || []
     const guidance = rubricCriterion?.evaluation_guidance || {}
 
+    const compactHistory = previousContext.slice(-3).map((turn) => ({
+      question: String(turn.question_text || '').slice(0, 400),
+      answer: String(turn.answer_text || '').slice(0, 700),
+      evidence: turn.analysis ? {
+        concepts: (turn.analysis.concepts_detected || []).slice(0, 8),
+        missing: (turn.analysis.missing_concepts || []).slice(0, 5),
+        summary: String(turn.analysis.feedback_summary || '').slice(0, 300),
+      } : undefined,
+    }))
+
     const prompt = `You are the QualifyAI evidence analyst. Evaluate this candidate response strictly against the rubric and expected concepts. Provide evidence only; do not decide or write the next question:
 
 Question:
@@ -52,8 +62,8 @@ Candidate's Answer:
 ${candidateAnswer}
 """
 
-Prior committed answer evidence:
-${JSON.stringify(previousContext.slice(-8))}
+Prior answer context (most recent 3 turns):
+${JSON.stringify(compactHistory)}
 
 Task: Perform an objective, evidence-based technical analysis.
 Evaluate:

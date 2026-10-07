@@ -28,7 +28,7 @@ export class TTSProvider {
    * @param {object} params
    * @param {string} params.text - Cleaned text to synthesize
    * @param {object} params.voiceProfile - Voice profile configuration
-   * @param {function} params.onChunk - Callback invoked for each audio chunk: ({ data: base64, mimeType, sampleRate, chunkIndex })
+   * @param {function} params.onChunk - Callback invoked for each audio chunk with its encoded bytes and actual format metadata.
    * @param {AbortSignal} [params.signal] - Optional cancellation signal
    * @returns {Promise<{ fullTranscript: string, totalChunks: number, durationMs: number }>}
    */
@@ -36,10 +36,4 @@ export class TTSProvider {
     throw new Error(`TTSProvider '${this.name}' must implement synthesize()`)
   }
 
-  /**
-   * Returns audio sample rate (defaults to 24000 Hz)
-   */
-  getSampleRate() {
-    return 24000
-  }
 }

@@ -485,6 +485,41 @@ export const interviewEngineService = {
     })
     try {
       return await processing
+    } catch (error) {
+      try {
+        const supabase = getServiceSupabaseClient()
+        let sessionQuery = supabase.from('interview_sessions').select('id, session_metadata, conversation_state')
+        sessionQuery = interviewId
+          ? sessionQuery.eq('interview_id', interviewId)
+          : sessionQuery
+        let { data: failedSession } = await sessionQuery.maybeSingle()
+        if (!failedSession) {
+          const { data } = await supabase
+            .from('interview_sessions')
+            .select('id, session_metadata, conversation_state')
+            .eq('id', interviewId)
+            .maybeSingle()
+          failedSession = data
+        }
+
+        const failedMeta = failedSession?.session_metadata || {}
+        const hasCommittedAnswer = (failedMeta.answer_history || []).some((item) =>
+          item.questionId === answer.questionId && item.questionSequence === answer.questionSequence
+        )
+        if (failedSession && hasCommittedAnswer && failedSession.conversation_state === 'AI_ANALYZING') {
+          await supabase.from('interview_sessions').update({
+            conversation_state: 'THINKING',
+            session_metadata: {
+              ...failedMeta,
+              answer_processing_state: 'FAILED',
+              answer_processing_failed_at: new Date().toISOString(),
+            },
+          }).eq('id', failedSession.id).eq('conversation_state', 'AI_ANALYZING')
+        }
+      } catch (recoveryMarkError) {
+        console.error('[InterviewEngine] Failed to mark answer processing as recoverable:', recoveryMarkError.message)
+      }
+      throw error
     } finally {
       if (activeTurnPromises.get(interviewId)?.promise === processing) activeTurnPromises.delete(interviewId)
     }
@@ -650,7 +685,10 @@ export const interviewEngineService = {
     const existingCommit = (meta.answer_history || []).find((answer) => answer.questionSequence === questionSequence && answer.questionId === questionId)
     const committedAtMs = existingCommit?.committedAt ? new Date(existingCommit.committedAt).getTime() : 0
     const isProcessingAnswer = answerState.duplicate && meta.conversation_state === 'AI_ANALYZING' && Date.now() - committedAtMs < 60_000
-    const recoveringCommittedAnswer = answerState.duplicate && meta.conversation_state === 'AI_ANALYZING' && !isProcessingAnswer
+    const recoveringCommittedAnswer = answerState.duplicate && (
+      (meta.conversation_state === 'AI_ANALYZING' && !isProcessingAnswer) ||
+      meta.answer_processing_state === 'FAILED'
+    )
 
     // Idempotently return canonical state when a committed answer is retried.
     if (answerState.duplicate && !recoveringCommittedAnswer) {
@@ -917,6 +955,8 @@ export const interviewEngineService = {
     // 11. Atomic Session Metadata Update with Monotonic Sequence
     const updatedMetadata = {
       ...meta,
+      answer_processing_state: undefined,
+      answer_processing_failed_at: undefined,
       event_sequence: decisionEventSequence + 1,
       current_question_sequence: nextQuestionSequence,
       current_question_id: dynamicQuestion.id,
@@ -972,13 +1012,6 @@ export const interviewEngineService = {
       gateway.speakPromptToSession(session.id, spokenPrompt)
     }
 
-    // 14. Fetch Updated Transcripts for response
-    const { data: updatedTranscripts } = await supabase
-      .from('transcripts')
-      .select('*')
-      .eq('interview_id', interview.id)
-      .order('sequence', { ascending: true })
-
     return {
       isCompleted: false,
       sequence: nextQuestionSequence,
@@ -993,7 +1026,7 @@ export const interviewEngineService = {
         session_metadata: updatedMetadata,
       },
       coverageMatrix: updatedMetadata.coverage_matrix,
-      transcripts: updatedTranscripts || [],
+      transcripts: [],
     }
   },
 

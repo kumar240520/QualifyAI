@@ -37,7 +37,7 @@ test('Voice Profiles correctly configure natural human recruiter voices', () => 
   assert.equal(DEFAULT_VOICE_PROFILE.id, 'sarah_recruiter')
   assert.equal(DEFAULT_VOICE_PROFILE.geminiVoice, 'Aoede', 'Sarah uses Aoede (top warm natural voice)')
   assert.equal(DEFAULT_VOICE_PROFILE.kokoroVoice, 'af_heart', 'Sarah uses af_heart for Kokoro')
-  assert.equal(DEFAULT_VOICE_PROFILE.sampleRate, 24000)
+  assert.equal('sampleRate' in DEFAULT_VOICE_PROFILE, false, 'The voice profile does not hardcode runtime audio format metadata')
 
   const michael = getVoiceProfile('michael_recruiter')
   assert.equal(michael.interviewerName, 'Michael')

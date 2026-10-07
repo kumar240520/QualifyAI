@@ -26,13 +26,32 @@ export const createRealtimeQuestionGenerator = (ai = aiOrchestrator) => ({
     noResponse = false,
     wrapUpMode = false,
   }) {
-    const recentQuestions = askedQuestions.slice(-12).map((item) => ({
-      id: item.id,
-      text: item.text || item.question_text,
+    const recentQuestions = askedQuestions.slice(-6).map((item) => ({
+      text: String(item.text || item.question_text || '').slice(0, 350),
       type: item.type,
       skill: item.skill,
       topic: item.topic,
     }))
+    const compactTurnHistory = turnHistory.slice(-3).map((turn) => ({
+      question_text: String(turn.question_text || '').slice(0, 500),
+      answer_text: String(turn.answer_text || '').slice(0, 900),
+      criterion_name: turn.criterion_name,
+      analysis: turn.analysis ? {
+        correctness: turn.analysis.correctness,
+        relevance: turn.analysis.relevance,
+        depth: turn.analysis.depth,
+        concepts_detected: (turn.analysis.concepts_detected || []).slice(0, 8),
+        missing_concepts: (turn.analysis.missing_concepts || []).slice(0, 5),
+        feedback_summary: String(turn.analysis.feedback_summary || '').slice(0, 350),
+      } : undefined,
+    }))
+    const resumeContext = candidate?.resume_text || candidate?.resume || null
+    const compactResume = resumeContext
+      ? (typeof resumeContext === 'string' ? resumeContext : JSON.stringify(resumeContext)).slice(0, 6000)
+      : null
+    const jobRequirements = job?.job_requirements
+      ? (typeof job.job_requirements === 'string' ? job.job_requirements : JSON.stringify(job.job_requirements)).slice(0, 4000)
+      : null
 
     const prompt = `You are the autonomous senior technical interviewer for ${candidate?.full_name || 'the candidate'} applying for ${job?.title || 'this role'}.
 
@@ -80,7 +99,7 @@ ACTIVE LISTENING & GROUNDED FOLLOW-UP PROTOCOL (MANDATORY):
 3. Keep the spoken response natural, warm, professional, and concise (under 3 sentences total). Never speak monologues or markdown tags.
 
 ROLE CONTEXT:
-${JSON.stringify({ title: job?.title, description: job?.description, seniority: job?.seniority, department: job?.department, requirements: job?.job_requirements, resume: candidate?.resume_text || candidate?.resume || null })}
+${JSON.stringify({ title: job?.title, description: String(job?.description || '').slice(0, 5000), seniority: job?.seniority, department: job?.department, requirements: jobRequirements, resume: compactResume })}
 
 RUBRIC CRITERIA (evaluation goals, not questions):
 ${JSON.stringify(rubricCriteria.map(({ id, name, description, weight, expected_competency }) => ({ id, name, description, weight, expected_competency })))}
@@ -98,7 +117,7 @@ ANSWER EVIDENCE (analysis only; do not reuse any suggested question):
 ${JSON.stringify(answerAnalysis)}
 
 PRIOR TURN EVIDENCE:
-${JSON.stringify(turnHistory.slice(-8))}
+${JSON.stringify(compactTurnHistory)}
 
 RECENT QUESTIONS (avoid repeats; these are history, not a queue):
 ${JSON.stringify(recentQuestions)}

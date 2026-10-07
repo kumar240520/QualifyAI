@@ -1,11 +1,22 @@
 /**
  * Client-Side Real-Time Web Audio Engine for QualifyAI Voice Interviews
  * Handles microphone capture (16kHz PCM16), WebSocket streaming,
- * low-latency audio playback (24kHz PCM16), barge-in interruptibility,
+ * validated audio playback through AIInterviewAudioPlayer, barge-in interruptibility,
  * and audio frequency analysis for the visualizer orb.
  */
 // Global singleton holder for cross-page engine transfer (InvitationAcceptancePage → InterviewRoomPage)
+import { AIInterviewAudioPlayer } from './AIInterviewAudioPlayer.js'
+
 let _preconnectedEngine = null
+
+function getSelectedMicConstraint() {
+  try {
+    const deviceId = window.localStorage?.getItem('qualifyai:selected-microphone')
+    return deviceId ? { deviceId: { ideal: deviceId } } : {}
+  } catch (_) {
+    return {}
+  }
+}
 
 export class VoiceInterviewEngine {
   /**
@@ -44,30 +55,13 @@ export class VoiceInterviewEngine {
     this.analyserNode = null
     this.animFrameId = null
 
-    // Audio Playback & Jitter Buffer State
-    this.audioQueue = []
+    // All AI audio is decoded, buffered, scheduled, and drained by one player.
     this.isPlaying = false
-    this.scheduledTime = 0
-    this.activeSources = []
-    this.pcmByteCarryover = null // Residual odd byte carried across WebSocket chunks
+    this.audioState = 'IDLE'
+    this.activeAudioTurnId = null
+    this.audioPlaybackFailed = false
     this.isAiTurnActive = false // Strictly true while Gemini Live audio turn is being generated/streamed
     this.turnCompletionTimer = null
-
-    // Audio Diagnostics Metrics
-    this.audioStats = {
-      sampleRate: 24000,
-      channels: 1,
-      bitDepth: 16,
-      chunksReceived: 0,
-      bytesReceived: 0,
-      chunkSizes: [],
-      chunkIntervals: [],
-      lastChunkTimestamp: 0,
-      droppedChunks: 0,
-      duplicateChunks: 0,
-      lastChunkIndex: -1,
-      audioContextState: 'uninitialized',
-    }
 
     this.preventAiInterruption = true // Default ON: Protect AI speech from background noise/speaker echo
     this.isMuted = false
@@ -81,6 +75,28 @@ export class VoiceInterviewEngine {
     this.conversationState = 'DISCONNECTED' // 'CONNECTING' | 'LISTENING' | 'THINKING' | 'SPEAKING' | 'MUTED'
     this.hasNativeAudioSession = false
     this.hasReceivedNativeAudioInCurrentTurn = false
+    this.latestAiTranscript = ''
+    this.aiAudioPlayer = new AIInterviewAudioPlayer({
+      onPlaybackStart: ({ turnId }) => {
+        this.activeAudioTurnId = turnId
+        this.isPlaying = true
+        this.audioState = 'AI_SPEAKING'
+        this.isAutoMutedWhileSpeaking = true
+        this._muteMicrophoneHardware(true)
+        this._updateState('SPEAKING')
+      },
+      onPlaybackComplete: (report) => {
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: 'ai_audio_playback_complete', audioTurnId: report.turnId, stats: report.stats }))
+        }
+        this._concludeAiSpeakingTurn()
+      },
+      onError: (error) => {
+        this.audioPlaybackFailed = true
+        this.audioState = 'ERROR'
+        console.error('[VoiceEngine] AI audio playback failed:', error.message)
+      },
+    })
 
     // 30%-40% Voice Intensity Gate (Threshold: 0.35):
     // Ambient sound and background noise below 35% volume are strictly filtered out
@@ -91,6 +107,7 @@ export class VoiceInterviewEngine {
 
     if (typeof window !== 'undefined') {
       window.__QUALIFYAI_AUDIO_ENGINE__ = this
+      if (import.meta.env?.DEV) window.__QUALIFYAI_AUDIO_DIAGNOSTICS__ = () => this.getAudioDiagnostics()
     }
   }
 
@@ -235,33 +252,7 @@ export class VoiceInterviewEngine {
    * Diagnostic reporter for developer / audio pipeline inspection
    */
   getAudioDiagnostics() {
-    const avgSize = this.audioStats.chunkSizes.length
-      ? Math.round(this.audioStats.chunkSizes.reduce((a, b) => a + b, 0) / this.audioStats.chunkSizes.length)
-      : 0
-    const avgInterval = this.audioStats.chunkIntervals.length
-      ? Math.round(this.audioStats.chunkIntervals.reduce((a, b) => a + b, 0) / this.audioStats.chunkIntervals.length)
-      : 0
-
-    return {
-      geminiFormat: 'audio/pcm;rate=24000 (16-bit LE mono)',
-      sampleRate: 24000,
-      channels: 1,
-      bitDepth: 16,
-      chunksReceived: this.audioStats.chunksReceived,
-      bytesReceived: this.audioStats.bytesReceived,
-      averageChunkSize: avgSize,
-      averageChunkIntervalMs: avgInterval,
-      droppedChunks: this.audioStats.droppedChunks,
-      duplicateChunks: this.audioStats.duplicateChunks,
-      activeSourcesCount: this.activeSources.length,
-      audioContextState: this.outputAudioContext?.state || 'closed',
-      audioContextSampleRate: this.outputAudioContext?.sampleRate || 0,
-      isAiTurnActive: this.isAiTurnActive,
-      preventAiInterruption: this.preventAiInterruption,
-      scheduledTime: this.scheduledTime,
-      currentTime: this.outputAudioContext?.currentTime || 0,
-      playbackLatencyMs: Math.max(0, Math.round((this.scheduledTime - (this.outputAudioContext?.currentTime || 0)) * 1000)),
-    }
+    return { ...this.aiAudioPlayer.getState(), isAiTurnActive: this.isAiTurnActive, preventAiInterruption: this.preventAiInterruption }
   }
 
   /**
@@ -269,15 +260,7 @@ export class VoiceInterviewEngine {
    */
   async _ensureOutputAudioContext() {
     try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext
-      if (!this.outputAudioContext) {
-        // Native hardware rate (44.1k/48k); Web Audio cleanly resamples 24kHz buffers
-        this.outputAudioContext = new AudioCtx()
-      }
-      if (this.outputAudioContext.state === 'suspended') {
-        await this.outputAudioContext.resume()
-      }
-      this.audioStats.audioContextState = this.outputAudioContext.state
+      this.outputAudioContext = await this.aiAudioPlayer.initialize()
       return this.outputAudioContext
     } catch (err) {
       console.warn('[VoiceEngine] Failed to resume outputAudioContext:', err)
@@ -302,6 +285,7 @@ export class VoiceInterviewEngine {
 
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          ...getSelectedMicConstraint(),
           channelCount: 1,
           sampleRate: 16000,
           echoCancellation: { ideal: true },
@@ -338,7 +322,9 @@ export class VoiceInterviewEngine {
 
       // 1. Initialize Audio Contexts
       const AudioCtx = window.AudioContext || window.webkitAudioContext
-      this.inputAudioContext = new AudioCtx({ sampleRate: 16000 })
+      if (!this.inputAudioContext || this.inputAudioContext.state === 'closed') {
+        this.inputAudioContext = new AudioCtx({ sampleRate: 16000 })
+      }
       await this._ensureOutputAudioContext()
 
       // Resume context if suspended by browser autoplay policy
@@ -347,15 +333,18 @@ export class VoiceInterviewEngine {
       }
 
       // 2. Request Microphone Access
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: { ideal: true },
-          noiseSuppression: { ideal: true },
-          autoGainControl: { ideal: false },
-        },
-      })
+      if (!this.mediaStream || this.mediaStream.getTracks().every((track) => track.readyState === 'ended')) {
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            ...getSelectedMicConstraint(),
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: { ideal: true },
+            noiseSuppression: { ideal: true },
+            autoGainControl: { ideal: false },
+          },
+        })
+      }
 
       // 3. Connect to WebSocket Gateway
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -367,8 +356,8 @@ export class VoiceInterviewEngine {
       this.ws.onopen = () => {
         this.isConnected = true
         this.reconnectAttempts = 0
-        this._setupMicrophonePipeline()
-        this._setupSpeechRecognition()
+        if (!this.processorNode) this._setupMicrophonePipeline()
+        if (!this.recognition) this._setupSpeechRecognition()
         this._updateState('LISTENING')
         // Note: InterviewRoomPage explicitly calls markCandidateEnteredRoom() after 2 seconds!
       }
@@ -463,7 +452,7 @@ export class VoiceInterviewEngine {
         this.isManualMuted ||
         this.isAutoMutedWhileSpeaking ||
         this.conversationState === 'SPEAKING' ||
-        this.activeSources.length > 0 ||
+        this.aiAudioPlayer.activeSources.size > 0 ||
         !this.isConnected ||
         this.ws?.readyState !== WebSocket.OPEN
       ) {
@@ -587,13 +576,23 @@ export class VoiceInterviewEngine {
           }
           break
 
+        case 'ai_audio_started':
+        case 'ai_turn_started': // Legacy server compatibility during rolling deploys
+          if (!this.hasEnteredRoom) break
+          this._beginAudioTurn(msg.audioTurnId)
+          this.isAiTurnActive = true
+          this.isAutoMutedWhileSpeaking = true
+          this._muteMicrophoneHardware(true)
+          this.audioState = 'AI_SPEAKING'
+          this._updateState('SPEAKING')
+          break
+
         case 'ai_audio_chunk':
-          // Audio chunk from Gemini Live (24kHz PCM16 Base64) - strictly only play if in room!
+          // Preserve runtime format metadata and pass bytes to the authoritative player.
           if (!this.hasEnteredRoom) {
             break
           }
           this.hasNativeAudioSession = true
-          this.hasReceivedNativeAudioInCurrentTurn = true
           if ('speechSynthesis' in window) {
             try {
               window.speechSynthesis.cancel()
@@ -607,8 +606,9 @@ export class VoiceInterviewEngine {
           this.onTranscript({ text: msg.text, isDelta: true, speaker: 'AI' })
           break
 
-        case 'ai_turn_complete':
+        case 'ai_transcript_complete':
           if (!this.hasEnteredRoom) break
+          this.latestAiTranscript = msg.fullTranscript || ''
           this.onTranscript({
             text: msg.fullTranscript,
             questionText: msg.questionText,
@@ -618,56 +618,23 @@ export class VoiceInterviewEngine {
             speaker: 'AI',
           })
 
-          // SINGLE-VOICE TURN RESOLUTION:
-          // If native audio was actually received for this turn and not flagged as fallback,
-          // let the Web Audio timeline conclude. Otherwise, immediately use browser SpeechSynthesis!
-          const hasNativeAudioInCurrentTurn =
-            (this.hasReceivedNativeAudioInCurrentTurn || this.activeSources.length > 0) && !msg.isFallback
+          break
 
-          if (hasNativeAudioInCurrentTurn) {
-            this.hasReceivedNativeAudioInCurrentTurn = false
-            this.isAiTurnActive = false
-
-            // Schedule graceful speaking conclusion once all queued audio completes on Web Audio timeline
-            const remainingSec = Math.max(0, this.scheduledTime - (this.outputAudioContext?.currentTime || 0))
-            if (this.turnCompletionTimer) clearTimeout(this.turnCompletionTimer)
-            this.turnCompletionTimer = setTimeout(() => {
-              if (!this.isAiTurnActive && this.activeSources.length === 0) {
-                this._concludeAiSpeakingTurn()
-              }
-            }, Math.ceil((remainingSec + 0.12) * 1000))
-          } else if ('speechSynthesis' in window && msg.fullTranscript) {
-            // Immediate Fallback: Speak aloud via SpeechSynthesis whenever native audio is absent in this turn
-            try {
-              window.speechSynthesis.cancel()
-              const utterance = new SpeechSynthesisUtterance(msg.fullTranscript)
-              utterance.lang = this.language || 'en-IN'
-              const bestVoice = this._getPreferredSpeechVoice()
-              if (bestVoice) utterance.voice = bestVoice
-              utterance.rate = 0.98
-              utterance.pitch = 1.0
-
-              this._updateState('SPEAKING')
-              this.isAutoMutedWhileSpeaking = true
-              this._muteMicrophoneHardware(true)
-
-              utterance.onend = () => {
-                this._concludeAiSpeakingTurn()
-              }
-
-              utterance.onerror = () => {
-                this._concludeAiSpeakingTurn()
-              }
-
-              window.speechSynthesis.speak(utterance)
-            } catch (synthErr) {
-              console.warn('[VoiceEngine] SpeechSynthesis fallback notice:', synthErr)
-              this._concludeAiSpeakingTurn()
-            }
-          } else {
-            // Audio finished or unavailable, restore microphone and return to listening
-            this._concludeAiSpeakingTurn()
+        case 'ai_audio_stream_complete':
+        case 'ai_turn_complete': // Legacy server compatibility during rolling deploys
+          if (!this.hasEnteredRoom) break
+          if (msg.type === 'ai_turn_complete') {
+            this.latestAiTranscript = msg.fullTranscript || ''
+            this.onTranscript({
+              text: msg.fullTranscript,
+              questionText: msg.questionText,
+              isNudge: msg.isNudge,
+              isTermination: msg.isTermination,
+              isFinal: true,
+              speaker: 'AI',
+            })
           }
+          this._handleAiTurnComplete({ ...msg, fullTranscript: msg.fullTranscript || this.latestAiTranscript })
           break
 
         case 'ai_question':
@@ -742,34 +709,7 @@ export class VoiceInterviewEngine {
       return
     }
 
-    // 2. Disconnected / offline fallback ONLY:
-    if ('speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel()
-        const utterance = new SpeechSynthesisUtterance(spokenText)
-        utterance.lang = this.language || 'en-IN'
-        const bestVoice = this._getPreferredSpeechVoice()
-        if (bestVoice) utterance.voice = bestVoice
-        utterance.rate = 0.98
-        utterance.pitch = 1.0
-
-        this._updateState('SPEAKING')
-        this.isAutoMutedWhileSpeaking = true
-        this._muteMicrophoneHardware(true)
-
-        utterance.onend = () => {
-          this._concludeAiSpeakingTurn()
-        }
-
-        utterance.onerror = () => {
-          this._concludeAiSpeakingTurn()
-        }
-
-        window.speechSynthesis.speak(utterance)
-      } catch (err) {
-        console.warn('[VoiceEngine] speakAiQuestion speech error:', err)
-      }
-    }
+    this.onError('The voice connection is unavailable. Reconnect before playing the interview question.')
   }
 
   /**
@@ -816,158 +756,45 @@ export class VoiceInterviewEngine {
     return this.speakAiQuestion(spokenText, true)
   }
 
-  /**
-   * Decode Base64 16-bit Little-Endian PCM audio with cross-chunk byte carryover
-   */
-  _decodePcm16Chunk(base64Data) {
-    if (!base64Data) return null
-    let binaryString = ''
-    try {
-      binaryString = atob(base64Data)
-    } catch (e) {
-      console.error('[VoiceEngine] Base64 decode failed for audio chunk:', e)
-      return null
-    }
-
-    const rawLen = binaryString.length
-    if (rawLen === 0) return null
-
-    // Combine any residual byte carried over from the previous chunk
-    const carryoverLen = this.pcmByteCarryover ? this.pcmByteCarryover.length : 0
-    const totalLen = carryoverLen + rawLen
-
-    // PCM16 requires an even number of bytes (2 bytes per sample)
-    const usableByteLen = totalLen - (totalLen % 2)
-    const remainderLen = totalLen - usableByteLen
-
-    const combinedBytes = new Uint8Array(usableByteLen)
-    let destIdx = 0
-
-    // 1. Insert carryover byte if available
-    if (carryoverLen > 0) {
-      for (let i = 0; i < carryoverLen && destIdx < usableByteLen; i++) {
-        combinedBytes[destIdx++] = this.pcmByteCarryover[i]
-      }
-      this.pcmByteCarryover = null
-    }
-
-    // 2. Insert incoming bytes up to usable limit
-    const binaryCopyLimit = usableByteLen - destIdx
-    for (let i = 0; i < binaryCopyLimit; i++) {
-      combinedBytes[destIdx++] = binaryString.charCodeAt(i)
-    }
-
-    // 3. Stash remainder byte for the next incoming chunk
-    if (remainderLen > 0) {
-      this.pcmByteCarryover = new Uint8Array(remainderLen)
-      for (let i = 0; i < remainderLen; i++) {
-        this.pcmByteCarryover[i] = binaryString.charCodeAt(binaryCopyLimit + i)
-      }
-    }
-
-    if (usableByteLen < 2) return null
-
-    // Convert Int16 (little-endian) to Float32 [-1.0, 1.0]
-    const sampleCount = usableByteLen / 2
-    const float32Array = new Float32Array(sampleCount)
-    const dataView = new DataView(combinedBytes.buffer, combinedBytes.byteOffset, combinedBytes.byteLength)
-
-    for (let i = 0; i < sampleCount; i++) {
-      const int16 = dataView.getInt16(i * 2, true) // Little-endian
-      // Proper Int16 normalization without DC shift or clipping
-      float32Array[i] = int16 < 0 ? int16 / 32768.0 : int16 / 32767.0
-    }
-
-    return float32Array
+  _beginAudioTurn(turnId) {
+    if (turnId != null && this.activeAudioTurnId === turnId) return
+    this.aiAudioPlayer.beginTurn(turnId)
+    this.activeAudioTurnId = turnId ?? this.aiAudioPlayer.turnId
+    this.latestAiTranscript = ''
+    this.audioPlaybackFailed = false
+    this.hasReceivedNativeAudioInCurrentTurn = false
   }
 
-  /**
-   * Schedule 24kHz PCM audio chunk onto Web Audio timeline with jitter buffering
-   */
-  async _playAiAudioChunk(chunkPayload) {
-    if (!this.hasEnteredRoom) return
-    await this._ensureOutputAudioContext()
-    if (!this.outputAudioContext) return
+  _playAiAudioChunk(chunkPayload) {
+    if (!this.hasEnteredRoom) return Promise.resolve()
+    if (this.isStopped) return Promise.resolve()
+    if (chunkPayload?.audioTurnId != null && chunkPayload.audioTurnId !== this.activeAudioTurnId) this._beginAudioTurn(chunkPayload.audioTurnId)
+    this.hasReceivedNativeAudioInCurrentTurn = true
+    this.isAiTurnActive = true
+    return this.aiAudioPlayer.enqueue(chunkPayload)
+  }
 
-    const base64Data = typeof chunkPayload === 'string' ? chunkPayload : chunkPayload?.data
-    if (!base64Data) return
-
-    const chunkIndex = typeof chunkPayload === 'object' ? chunkPayload.chunkIndex : null
-    const now = Date.now()
-
-    // 1. Metrics and Diagnostic Recording
-    this.audioStats.chunksReceived++
-    if (this.audioStats.lastChunkTimestamp) {
-      this.audioStats.chunkIntervals.push(now - this.audioStats.lastChunkTimestamp)
-      if (this.audioStats.chunkIntervals.length > 50) this.audioStats.chunkIntervals.shift()
+  _handleAiTurnComplete(message) {
+    if (message.audioTurnId != null && this.activeAudioTurnId != null && message.audioTurnId !== this.activeAudioTurnId) {
+      console.warn('[VoiceEngine] Ignoring completion for a stale audio turn.')
+      return
     }
-    this.audioStats.lastChunkTimestamp = now
-
-    if (typeof chunkIndex === 'number') {
-      if (this.audioStats.lastChunkIndex >= 0) {
-        if (chunkIndex === this.audioStats.lastChunkIndex) {
-          this.audioStats.duplicateChunks++
-          console.warn(`[VoiceEngine] Duplicate audio chunk #${chunkIndex} received. Ignoring.`)
-          return
-        } else if (chunkIndex < this.audioStats.lastChunkIndex) {
-          this.audioStats.droppedChunks++
-          console.warn(`[VoiceEngine] Out-of-order audio chunk #${chunkIndex} < #${this.audioStats.lastChunkIndex}.`)
-        } else if (chunkIndex > this.audioStats.lastChunkIndex + 1) {
-          this.audioStats.droppedChunks += chunkIndex - (this.audioStats.lastChunkIndex + 1)
-        }
-      }
-      this.audioStats.lastChunkIndex = chunkIndex
+    if (this.activeAudioTurnId == null && message.audioTurnId != null) this.activeAudioTurnId = message.audioTurnId
+    this.audioState = 'AI_FINISHING'
+    this.isAiTurnActive = false
+    if (message.audioUnavailable || this.audioPlaybackFailed || !this.hasReceivedNativeAudioInCurrentTurn) {
+      this.onError("We're having trouble playing the interviewer's audio. Please wait a moment.")
+      this._stopAiAudioPlayback()
+      this._concludeAiSpeakingTurn()
+      return
     }
-
-    // 2. Decode PCM16 Little-Endian to Float32
-    const float32Array = this._decodePcm16Chunk(base64Data)
-    if (!float32Array || float32Array.length === 0) return
-
-    this.audioStats.bytesReceived += float32Array.length * 2
-    this.audioStats.chunkSizes.push(float32Array.length * 2)
-    if (this.audioStats.chunkSizes.length > 50) this.audioStats.chunkSizes.shift()
-
-    try {
-      // 3. Create AudioBuffer at 24000Hz (native Web Audio resamples cleanly to output device)
-      const audioBuffer = this.outputAudioContext.createBuffer(1, float32Array.length, 24000)
-      audioBuffer.copyToChannel(float32Array, 0)
-
-      // 4. Sequential timeline scheduling with 80ms jitter buffer cushion
-      const JITTER_BUFFER_SEC = 0.08
-      const currentTime = this.outputAudioContext.currentTime
-
-      if (this.scheduledTime < currentTime) {
-        this.scheduledTime = currentTime + JITTER_BUFFER_SEC
-      }
-
-      const source = this.outputAudioContext.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(this.outputAudioContext.destination)
-      source.start(this.scheduledTime)
-
-      this.scheduledTime += audioBuffer.duration
-      this.activeSources.push(source)
-
-      // Mark speaking state and mute candidate mic hardware during AI delivery
-      this.isAiTurnActive = true
-      if (!this.isAutoMutedWhileSpeaking) {
-        this.isAutoMutedWhileSpeaking = true
-        this._muteMicrophoneHardware(true)
-      }
-      this._updateState('SPEAKING')
-
-      source.onended = () => {
-        const idx = this.activeSources.indexOf(source)
-        if (idx !== -1) this.activeSources.splice(idx, 1)
-
-        // Conclude speaking only when turn is completed AND all active sources have finished playing
-        if (this.activeSources.length === 0 && !this.isAiTurnActive) {
-          this._concludeAiSpeakingTurn()
-        }
-      }
-    } catch (err) {
-      console.error('[VoiceEngine] Failed to schedule audio chunk:', err)
-    }
+    this.aiAudioPlayer.completeStream().catch((err) => {
+      this.audioPlaybackFailed = true
+      console.error('[VoiceEngine] Could not complete AI audio stream:', err.message)
+      this._stopAiAudioPlayback()
+      this.onError("We're having trouble playing the interviewer's audio. Please wait a moment.")
+      this._concludeAiSpeakingTurn()
+    })
   }
 
   /**
@@ -980,7 +807,9 @@ export class VoiceInterviewEngine {
     }
     this.isAiTurnActive = false
     this.isAutoMutedWhileSpeaking = false
-    this.pcmByteCarryover = null
+    this.isPlaying = false
+    this.audioState = this.isManualMuted ? 'MUTED' : 'LISTENING'
+    this.hasReceivedNativeAudioInCurrentTurn = false
     if (!this.isManualMuted) {
       this._muteMicrophoneHardware(false)
       this._updateState('LISTENING')
@@ -1001,17 +830,10 @@ export class VoiceInterviewEngine {
       this.turnCompletionTimer = null
     }
     this.isAiTurnActive = false
-    for (const source of this.activeSources) {
-      try {
-        source.stop()
-        source.disconnect()
-      } catch (_) {}
-    }
-    this.activeSources = []
-    this.pcmByteCarryover = null
-    if (this.outputAudioContext) {
-      this.scheduledTime = this.outputAudioContext.currentTime
-    }
+    this.isPlaying = false
+    this.hasReceivedNativeAudioInCurrentTurn = false
+    this.aiAudioPlayer.stop()
+    this.audioState = 'INTERRUPTED'
   }
 
   /**
@@ -1043,7 +865,7 @@ export class VoiceInterviewEngine {
         }
 
         // Interruption & Barge-in Handling while AI is speaking:
-        if (this.conversationState === 'SPEAKING' || this.isAiTurnActive || this.activeSources.length > 0) {
+        if (this.conversationState === 'SPEAKING' || this.isAiTurnActive || this.aiAudioPlayer.activeSources.size > 0) {
           // If "Prevent AI Interruption" is enabled, background noise / speech MUST NOT interrupt the AI!
           if (this.preventAiInterruption) {
             return
@@ -1265,11 +1087,12 @@ export class VoiceInterviewEngine {
       this.inputAudioContext = null
     }
 
-    if (this.outputAudioContext) {
-      try {
-        this.outputAudioContext.close()
-      } catch (_) {}
-      this.outputAudioContext = null
+    this.aiAudioPlayer.destroy().catch((err) => console.warn('[VoiceEngine] Audio player cleanup failed:', err.message))
+    this.outputAudioContext = null
+
+    if (typeof window !== 'undefined' && window.__QUALIFYAI_AUDIO_ENGINE__ === this) {
+      delete window.__QUALIFYAI_AUDIO_ENGINE__
+      delete window.__QUALIFYAI_AUDIO_DIAGNOSTICS__
     }
 
     if (this.ws) {
@@ -1285,6 +1108,8 @@ export class VoiceInterviewEngine {
 
   _updateState(state) {
     this.conversationState = state
+    if (state === 'LISTENING' || state === 'MUTED' || state === 'THINKING') this.audioState = state
+    else if (state === 'SPEAKING' && !['AI_SPEAKING', 'AI_FINISHING', 'PLAYBACK_DRAINING'].includes(this.audioState)) this.audioState = 'AI_SPEAKING'
     this.onStateChange(state)
   }
 

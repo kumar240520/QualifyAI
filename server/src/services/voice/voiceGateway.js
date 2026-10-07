@@ -4,10 +4,43 @@ import { getServiceSupabaseClient } from '../../integrations/supabaseClient.js'
 import { interviewEngineService } from '../interview/interviewEngineService.js'
 import { config } from '../../config/env.js'
 import { DEFAULT_VOICE_PROFILE, getVoiceProfile } from './voiceProfile.js'
-import { cleanTextForSpeech } from './speechSegmenter.js'
+import { cleanTextForSpeech, segmentSpeech } from './speechSegmenter.js'
 import { ttsManager } from './providers/TTSManager.js'
 
 let _gatewayInstance = null
+
+export function validatePcm16Chunk(chunk, { allowPartialFrame = false } = {}) {
+  const mimeType = String(chunk?.mimeType || '')
+  if (!/^audio\/pcm(?:;|$)/i.test(mimeType)) throw new Error(`Unsupported TTS MIME type: ${mimeType || '(missing)'}`)
+  const rateInMime = mimeType.match(/(?:^|;)\s*rate=(\d+)/i)
+  const sampleRate = Number(rateInMime ? rateInMime[1] : chunk.sampleRate)
+  const channels = Number(chunk.channels)
+  const bitDepth = Number(chunk.bitDepth)
+  const byteOrder = String(chunk.byteOrder || '').toLowerCase()
+  if (!Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 96000) throw new Error(`Invalid TTS sample rate: ${sampleRate}`)
+  if (![1, 2].includes(channels)) throw new Error(`Unsupported TTS channel count: ${channels}`)
+  if (bitDepth !== 16) throw new Error(`Unsupported TTS bit depth: ${bitDepth}`)
+  if (!['little-endian', 'le'].includes(byteOrder)) throw new Error(`Unsupported PCM byte order: ${byteOrder || '(missing)'}`)
+  if (typeof chunk.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(chunk.data)) throw new Error('TTS audio is not valid base64 PCM data.')
+  const bytes = Buffer.from(chunk.data, 'base64')
+  const bytesPerFrame = 2 * channels
+  if (!bytes.length || (!allowPartialFrame && bytes.length % bytesPerFrame !== 0)) throw new Error('TTS PCM data is not frame aligned.')
+  const completeFrames = Math.floor(bytes.length / bytesPerFrame)
+  return {
+    ...chunk,
+    mimeType,
+    sampleRate,
+    channels,
+    bitDepth,
+    byteOrder: 'little-endian',
+    diagnostics: {
+      bytes: bytes.length,
+      completeFrames,
+      trailingBytes: bytes.length % bytesPerFrame,
+      estimatedDurationSeconds: completeFrames / sampleRate,
+    },
+  }
+}
 
 export function getVoiceGateway() {
   return _gatewayInstance
@@ -187,9 +220,32 @@ export class VoiceGateway {
         console.log(`[VoiceGateway] Spoken prompt delivery to ${ctx.candidateName}: "${cleanPrompt.substring(0, 50)}..."`)
         ctx.hasEmittedTurnForCurrentInput = false
         ctx.fallbackEmitted = false
+        ctx.currentAITranscript = ''
+        ctx.currentSpokenPrompt = cleanPrompt
+        ctx.audioTurnSequence = (ctx.audioTurnSequence || 0) + 1
+        ctx.audioTurnId = `${ctx.sessionId}-${ctx.audioTurnSequence}`
+        ctx.currentAudioChunkIndex = 0
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'ai_audio_started', sessionId: ctx.sessionId, audioTurnId: ctx.audioTurnId }))
+        }
 
         const interviewerName = ctx.voiceProfile?.interviewerName || 'Sarah'
-        const promptInstruction = `Speak the following message aloud directly to candidate ${ctx.candidateName} with natural human recruiter warmth, engaging inflection, and conversational pacing: "${cleanPrompt}". Do NOT add any extra thoughts, preambles, or meta labels.`
+        const segments = segmentSpeech(cleanPrompt)
+        const structuredText = segments.join('\n\n')
+
+        const promptInstruction = segments.length > 1
+          ? `Deliver the following interview message aloud to candidate ${ctx.candidateName}.
+Maintain consistent vocal warmth, natural conversational cadence, and engaging melody throughout, especially on the final sentence.
+Delivery instructions:
+- Pause naturally between sentences as a real human interviewer does.
+- Maintain full pitch variation and expressive vocal energy from the opening words through to the very last word.
+- Do not rush or flatten your intonation on the final sentence.
+- If the final sentence is a question, ask it with curious, inviting cadence.
+- Do not add any preamble, meta text, or thoughts.
+
+Message to speak:
+${structuredText}`
+          : `Speak the following message aloud directly to candidate ${ctx.candidateName} with natural human recruiter warmth, engaging inflection, and conversational pacing: "${cleanPrompt}". Do NOT add any extra thoughts, preambles, or meta labels.`
 
         // If geminiSession is not connected (e.g. idle timeout disconnected it), quickly reconnect
         if (!ctx.geminiSession && !ctx.isConnectingGemini) {
@@ -238,6 +294,15 @@ export class VoiceGateway {
     if (!ws || ws.readyState !== 1) return
     const cleanPrompt = cleanTextForSpeech(textToSpeak)
     if (!cleanPrompt) return
+    // Claim fallback before synthesis starts so a late Gemini packet cannot overlap it.
+    ctx.fallbackEmitted = true
+    if ((ctx.currentAudioChunkIndex || 0) > 0) {
+      ctx.audioTurnSequence = (ctx.audioTurnSequence || 0) + 1
+      ctx.audioTurnId = `${ctx.sessionId}-${ctx.audioTurnSequence}-recovery`
+      ctx.currentAudioChunkIndex = 0
+      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ai_audio_started', sessionId: ctx.sessionId, audioTurnId: ctx.audioTurnId }))
+    }
+    const audioTurnId = ctx.audioTurnId
 
     try {
       console.log(`[VoiceGateway] Attempting secondary TTS fallback for "${cleanPrompt.substring(0, 40)}..."`)
@@ -253,18 +318,26 @@ export class VoiceGateway {
         onChunk: (chunk) => {
           streamedChunks++
           if (ws.readyState === 1) {
-            ws.send(
-              JSON.stringify({
+            try {
+              const validated = validatePcm16Chunk(chunk)
+              ws.send(JSON.stringify({
                 type: 'ai_audio_chunk',
-                data: chunk.data,
-                mimeType: chunk.mimeType || 'audio/pcm;rate=24000',
+                data: validated.data,
+                mimeType: validated.mimeType,
+                audioTurnId,
                 chunkIndex: chunk.chunkIndex || streamedChunks,
-                sampleRate: chunk.sampleRate || 24000,
-                channels: 1,
-                bitDepth: 16,
+                audioSequence: chunk.chunkIndex || streamedChunks,
+                sampleRate: validated.sampleRate,
+                channels: validated.channels,
+                bitDepth: validated.bitDepth,
+                byteOrder: validated.byteOrder,
+                diagnostics: validated.diagnostics,
                 timestamp: Date.now(),
-              })
-            )
+              }))
+            } catch (formatError) {
+              streamedChunks--
+              console.warn('[VoiceGateway] Dropping invalid fallback PCM chunk:', formatError.message)
+            }
           }
         },
       })
@@ -273,17 +346,19 @@ export class VoiceGateway {
         ctx.isAiSpeaking = false
         ws.send(
           JSON.stringify({
-            type: 'ai_turn_complete',
+            type: 'ai_transcript_complete',
             sessionId: ctx.sessionId,
+            audioTurnId,
             eventId: `${ctx.sessionId}-fallback-voice-${Date.now()}`,
             fullTranscript: cleanPrompt,
             questionText: extractQuestionText(cleanPrompt) || cleanPrompt,
             isNudge: isNudgeText(cleanPrompt),
             isTermination: isTerminationText(cleanPrompt),
             questionSequence: ctx.currentQuestionSequence || 0,
-            isFallback: false, // Emitted real 24kHz PCM audio, so client shouldn't use browser synth!
+            isFallback: false,
           })
         )
+        ws.send(JSON.stringify({ type: 'ai_audio_stream_complete', sessionId: ctx.sessionId, audioTurnId, isFallback: false }))
         return
       }
     } catch (fallbackErr) {
@@ -324,7 +399,7 @@ export class VoiceGateway {
 
     ws.send(
       JSON.stringify({
-        type: 'ai_turn_complete',
+        type: 'ai_transcript_complete',
         sessionId: ctx.sessionId,
         eventId: `${ctx.sessionId}-fallback-${Date.now()}`,
         fullTranscript: cleanedCompleted,
@@ -332,9 +407,11 @@ export class VoiceGateway {
         isNudge,
         isTermination,
         isFallback: true,
+        audioTurnId: ctx.audioTurnId,
         questionSequence: ctx.currentQuestionSequence || 0,
       })
     )
+    ws.send(JSON.stringify({ type: 'ai_audio_stream_complete', sessionId: ctx.sessionId, audioTurnId: ctx.audioTurnId, isFallback: true, audioUnavailable: true }))
     console.log(`[VoiceGateway] Immediate fallback turn dispatched to ${candidate?.full_name || ctx.candidateName}: "${cleanedCompleted.substring(0, 60)}..."`)
   }
 
@@ -400,6 +477,9 @@ export class VoiceGateway {
         isAiSpeaking: false,
         preventAiInterruption: true, // Default: Prevent false interruption from background noise/speaker echo
         currentAudioChunkIndex: 0,
+        audioTurnSequence: 0,
+        audioTurnId: null,
+        currentSpokenPrompt: null,
         job,
         voiceProfile,
       }
@@ -413,6 +493,18 @@ export class VoiceGateway {
           if (!ctx) return
 
           switch (packet.type) {
+            case 'ai_audio_playback_complete': {
+              if (packet.audioTurnId === ctx.audioTurnId) {
+                ctx.lastPlaybackReport = packet.stats || null
+                console.info('[VoiceGateway] Client playback complete', JSON.stringify({
+                  sessionId: ctx.sessionId,
+                  audioTurnId: packet.audioTurnId,
+                  clientStats: packet.stats || null,
+                }))
+              }
+              break
+            }
+
             case 'set_prevent_interruption': {
               ctx.preventAiInterruption = Boolean(packet.enabled)
               console.log(`[VoiceGateway] Set preventAiInterruption = ${ctx.preventAiInterruption} for session ${ctx.sessionId}`)
@@ -540,7 +632,6 @@ export class VoiceGateway {
 
       const systemPrompt = `You are ${interviewerName}, a warm, highly professional senior technical interviewer at QualifyAI. Your vocal delivery must sound authentically human, welcoming, engaging, and articulate. Speak with natural conversational melody, varied cadence, and appropriate vocal pauses. Speak only the exact text in explicit speak requests to candidate ${candidateName}. Do not add unprompted questions, acknowledgements, greetings, or follow-ups. Do not react to background microphone audio. Never output internal thoughts, chain-of-thought tokens, or meta text.`
 
-      let currentAITranscript = ''
       let geminiSession = null
       const liveModels = [
         voiceProfile.geminiModel || 'models/gemini-2.5-flash-native-audio-latest',
@@ -587,7 +678,7 @@ export class VoiceGateway {
                   const textChunk = msg.serverContent.outputTranscription.text
                   if (!isThoughtOrMetaPlanning(textChunk)) {
                     const cleaned = textChunk.replace(/\*\*.*?\*\*/g, '').replace(/^[A-Z\s]+:\s*/, '')
-                    currentAITranscript += cleaned
+                    sessionContext.currentAITranscript = `${sessionContext.currentAITranscript || ''}${cleaned}`
                     if (ws.readyState === 1) {
                       ws.send(
                         JSON.stringify({
@@ -612,26 +703,70 @@ export class VoiceGateway {
                       sessionContext.turnWatchdog = null
                     }
                     sessionContext.currentAudioChunkIndex = (sessionContext.currentAudioChunkIndex || 0) + 1
+                    const mimeType = part.inlineData.mimeType
+                    const rateMatch = mimeType.match(/(?:^|;)\s*rate=(\d+)/i)
+                    const declaredRate = rateMatch ? Number(rateMatch[1]) : null
                     if (ws.readyState === 1) {
-                      ws.send(
-                        JSON.stringify({
-                          type: 'ai_audio_chunk',
+                      try {
+                        const validated = validatePcm16Chunk({
                           data: part.inlineData.data,
-                          mimeType: part.inlineData.mimeType,
-                          chunkIndex: sessionContext.currentAudioChunkIndex,
-                          sampleRate: 24000,
+                          mimeType,
+                          sampleRate: declaredRate,
                           channels: 1,
                           bitDepth: 16,
+                          byteOrder: 'little-endian',
+                        }, { allowPartialFrame: true })
+                        if (process.env.NODE_ENV !== 'production' && sessionContext.currentAudioChunkIndex <= 5) {
+                          console.info('[VoiceGateway][Gemini audio capture]', JSON.stringify({
+                            audioTurnId: sessionContext.audioTurnId,
+                            audioSequence: sessionContext.currentAudioChunkIndex,
+                            transport: 'Gemini Live SDK callback -> base64 inlineData.data -> JSON WebSocket text frame',
+                            messageType: 'serverContent.modelTurn.parts[].inlineData',
+                            mimeType: validated.mimeType,
+                            base64Characters: part.inlineData.data?.length || 0,
+                            ...validated.diagnostics,
+                            format: {
+                              sampleRate: validated.sampleRate,
+                              sampleRateEvidence: rateMatch ? 'inlineData MIME rate parameter' : 'not declared; chunk rejected',
+                              channels: validated.channels,
+                              channelsEvidence: 'Gemini Live protocol expectation; not carried in inlineData metadata',
+                              bitDepth: validated.bitDepth,
+                              bitDepthEvidence: 'Gemini Live protocol expectation; not carried in inlineData metadata',
+                              byteOrder: validated.byteOrder,
+                              byteOrderEvidence: 'Gemini Live protocol expectation; not carried in inlineData metadata',
+                            },
+                          }))
+                        }
+                        ws.send(JSON.stringify({
+                          type: 'ai_audio_chunk',
+                          data: validated.data,
+                          mimeType: validated.mimeType,
+                          audioTurnId: sessionContext.audioTurnId,
+                          chunkIndex: sessionContext.currentAudioChunkIndex,
+                          audioSequence: sessionContext.currentAudioChunkIndex,
+                          sampleRate: validated.sampleRate,
+                          channels: validated.channels,
+                          bitDepth: validated.bitDepth,
+                          byteOrder: validated.byteOrder,
+                          diagnostics: validated.diagnostics,
+                          formatEvidence: {
+                            sampleRate: rateMatch ? 'inlineData MIME' : 'unknown',
+                            channels: 'Gemini Live protocol expectation; not inlineData metadata',
+                            bitDepth: 'Gemini Live protocol expectation; not inlineData metadata',
+                            byteOrder: 'Gemini Live protocol expectation; not inlineData metadata',
+                          },
                           timestamp: Date.now(),
-                        })
-                      )
+                        }))
+                      } catch (formatError) {
+                        console.warn('[VoiceGateway] Dropping invalid Gemini PCM chunk:', formatError.message)
+                      }
                     }
                   }
 
                   if (part.text && !isThoughtOrMetaPlanning(part.text)) {
                     const cleanedText = part.text.replace(/\*\*.*?\*\*/g, '').replace(/^[A-Z\s]+:\s*/, '')
                     if (cleanedText && ws.readyState === 1) {
-                      currentAITranscript += cleanedText
+                      sessionContext.currentAITranscript = `${sessionContext.currentAITranscript || ''}${cleanedText}`
                       ws.send(
                         JSON.stringify({
                           type: 'ai_transcript_delta',
@@ -664,28 +799,36 @@ export class VoiceGateway {
                     clearTimeout(sessionContext.turnWatchdog)
                     sessionContext.turnWatchdog = null
                   }
-                  const cleanedCompleted = currentAITranscript
+                  const cleanedCompleted = (sessionContext.currentAITranscript || '')
                     .replace(/\*\*.*?\*\*/g, '')
                     .replace(/^[#*]+\s*/gm, '')
                     .trim()
 
-                  currentAITranscript = ''
+                  sessionContext.currentAITranscript = ''
 
-                  if (cleanedCompleted && !isThoughtOrMetaPlanning(cleanedCompleted) && ws.readyState === 1) {
-                    const isNudge = isNudgeText(cleanedCompleted)
-                    const isTermination = isTerminationText(cleanedCompleted)
-
-                    ws.send(
-                      JSON.stringify({
-                        type: 'ai_turn_complete',
-                        sessionId: sessionContext.sessionId,
-                        eventId: `${sessionContext.sessionId}-voice-${Date.now()}`,
-                        fullTranscript: cleanedCompleted,
-                        isNudge,
-                        isTermination,
-                        questionSequence: sessionContext.currentQuestionSequence || 0,
-                      })
-                    )
+                  const spokenTranscript = isThoughtOrMetaPlanning(cleanedCompleted)
+                    ? (sessionContext.currentSpokenPrompt || '')
+                    : (cleanedCompleted || sessionContext.currentSpokenPrompt || '')
+                  sessionContext.currentSpokenPrompt = null
+                  if (ws.readyState === 1) {
+                    const isNudge = isNudgeText(spokenTranscript)
+                    const isTermination = isTerminationText(spokenTranscript)
+                    ws.send(JSON.stringify({
+                      type: 'ai_transcript_complete',
+                      sessionId: sessionContext.sessionId,
+                      audioTurnId: sessionContext.audioTurnId,
+                      eventId: `${sessionContext.sessionId}-voice-${Date.now()}`,
+                      fullTranscript: spokenTranscript,
+                      isNudge,
+                      isTermination,
+                      questionSequence: sessionContext.currentQuestionSequence || 0,
+                    }))
+                    ws.send(JSON.stringify({
+                      type: 'ai_audio_stream_complete',
+                      sessionId: sessionContext.sessionId,
+                      audioTurnId: sessionContext.audioTurnId,
+                      isFallback: false,
+                    }))
                   }
                 }
               },
@@ -697,13 +840,9 @@ export class VoiceGateway {
                   sessionContext.turnWatchdog = null
                 }
                 console.error('[VoiceGateway] Gemini Live error:', err.message || err)
-                if (ws.readyState === 1) {
-                  ws.send(
-                    JSON.stringify({
-                      type: 'ai_error',
-                      message: err.message || 'Live voice stream error',
-                    })
-                  )
+                if (ws.readyState === 1 && sessionContext.currentSpokenPrompt && !sessionContext.fallbackEmitted) {
+                  this._deliverFallbackAudioOrTurn(sessionContext, sessionContext.currentSpokenPrompt, ws)
+                    .catch((fallbackError) => console.warn('[VoiceGateway] Voice recovery failed:', fallbackError.message))
                 }
               },
               onclose: (e) => {
@@ -715,6 +854,10 @@ export class VoiceGateway {
                   sessionContext.turnWatchdog = null
                 }
                 console.log('[VoiceGateway] Gemini Live session closed:', e.reason || e.code)
+                if (ws.readyState === 1 && sessionContext.currentSpokenPrompt && !sessionContext.fallbackEmitted) {
+                  this._deliverFallbackAudioOrTurn(sessionContext, sessionContext.currentSpokenPrompt, ws)
+                    .catch((fallbackError) => console.warn('[VoiceGateway] Voice recovery after close failed:', fallbackError.message))
+                }
                 // Auto-reconnect Gemini Live after idle disconnect so next questions remain responsive!
                 if (ws.readyState === 1 && !sessionContext.isClosed) {
                   setTimeout(() => {

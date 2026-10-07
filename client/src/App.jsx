@@ -26,6 +26,7 @@ import CandidateDiagnosticPage from './pages/CandidateDiagnosticPage.jsx'
 import DatasetManagementView from './components/datasets/DatasetManagementView.jsx'
 import ModelEvaluationBenchmarkView from './components/benchmarks/ModelEvaluationBenchmarkView.jsx'
 import RecruiterOnboardingPage from './pages/RecruiterOnboardingPage.jsx'
+import AudioDiagnosticsPage from './pages/AudioDiagnosticsPage.jsx'
 
 // Candidate Pipeline Screened List
 const SAMPLE_CANDIDATES = [
@@ -314,6 +315,8 @@ function AppRoutes() {
 
       {/* 7. Candidate Personalized Growth Diagnostic Report */}
       <Route path="/diagnostic/:token" element={<CandidateDiagnosticPage />} />
+
+      {import.meta.env.DEV && <Route path="/audio-diagnostics" element={<AudioDiagnosticsPage />} />}
 
       {/* 8. 404 Not Found Page */}
       <Route path="*" element={<NotFoundPage />} />

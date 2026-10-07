@@ -59,9 +59,11 @@ export default function InvitationAcceptancePage() {
   const [rulesAccepted, setRulesAccepted] = useState(false)
 
   // Stage 3: Real Mic Check & Full Screen State
-  const [micStream, setMicStream] = useState(null)
   const [micAudioLevel, setMicAudioLevel] = useState(0)
-  const [micFrequencies, setMicFrequencies] = useState(new Array(24).fill(8))
+  const [micLevelDb, setMicLevelDb] = useState(-60)
+  const [audioInputDevices, setAudioInputDevices] = useState([])
+  const [selectedMicId, setSelectedMicId] = useState('')
+  const [micTestError, setMicTestError] = useState('')
   const [isMicTesting, setIsMicTesting] = useState(false)
   const [audioCheckPassed, setAudioCheckPassed] = useState(false)
   const [fullscreenCheckPassed, setFullscreenCheckPassed] = useState(false)
@@ -70,6 +72,8 @@ export default function InvitationAcceptancePage() {
   const analyserRef = useRef(null)
   const animFrameRef = useRef(null)
   const micStreamRef = useRef(null)
+  const micRequestIdRef = useRef(0)
+  const speechDetectedSinceRef = useRef(null)
 
   // Stage 4: Modal & 5-4-3-2-1 Countdown + Gemini Voice Pre-Connect
   const [showLaunchModal, setShowLaunchModal] = useState(false)
@@ -114,19 +118,75 @@ export default function InvitationAcceptancePage() {
     verifyToken()
   }, [token])
 
-  // Real Web Audio API Microphone Test with Real-Time RMS & Voice Band Fluctuation (Calibrated Automatic Gain)
-  const handleStartMicTest = async () => {
+  const refreshAudioInputDevices = async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const inputs = devices.filter((device) => device.kind === 'audioinput')
+      setAudioInputDevices(inputs)
+      if (selectedMicId && !inputs.some((device) => device.deviceId === selectedMicId)) {
+        setSelectedMicId('')
+      }
+    } catch (err) {
+      console.warn('Unable to list audio input devices:', err.message)
+    }
+  }
+
+  // Measure actual input RMS in dBFS, like a browser input level meter.
+  const handleStartMicTest = async (requestedDeviceId = selectedMicId) => {
+    const requestId = ++micRequestIdRef.current
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+    analyserRef.current = null
+    if (micStreamRef.current) micStreamRef.current.getTracks().forEach((track) => track.stop())
+    micStreamRef.current = null
+    if (audioContextRef.current) {
+      try { await audioContextRef.current.close() } catch (_) {}
+      audioContextRef.current = null
+    }
+
     try {
       setIsMicTesting(true)
+      setAudioCheckPassed(false)
+      setMicTestError('')
+      setMicAudioLevel(0)
+      setMicLevelDb(-60)
+      speechDetectedSinceRef.current = null
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          ...(requestedDeviceId ? { deviceId: { exact: requestedDeviceId } } : {}),
           echoCancellation: true,
           noiseSuppression: false,
-          autoGainControl: true,
+          autoGainControl: false,
         },
       })
+      if (requestId !== micRequestIdRef.current) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
       micStreamRef.current = stream
-      setMicStream(stream)
+      const activeDeviceId = stream.getAudioTracks()[0]?.getSettings?.().deviceId || requestedDeviceId || ''
+      if (activeDeviceId) {
+        setSelectedMicId(activeDeviceId)
+        try { window.localStorage.setItem('qualifyai:selected-microphone', activeDeviceId) } catch (_) {}
+      }
+      await refreshAudioInputDevices()
+      if (requestId !== micRequestIdRef.current) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+      stream.getAudioTracks().forEach((track) => {
+        track.onended = () => {
+          if (requestId !== micRequestIdRef.current) return
+          analyserRef.current = null
+          if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+          if (audioContextRef.current) audioContextRef.current.close().catch(() => {})
+          audioContextRef.current = null
+          setIsMicTesting(false)
+          setAudioCheckPassed(false)
+          setMicAudioLevel(0)
+          setMicTestError('The selected microphone disconnected. Choose an available input device.')
+        }
+      })
 
       const AudioCtx = window.AudioContext || window.webkitAudioContext
       const ctx = new AudioCtx()
@@ -138,78 +198,66 @@ export default function InvitationAcceptancePage() {
 
       const source = ctx.createMediaStreamSource(stream)
       const analyser = ctx.createAnalyser()
-      analyser.fftSize = 512
-      analyser.smoothingTimeConstant = 0.2
+      analyser.fftSize = 2048
+      analyser.smoothingTimeConstant = 0.85
+      analyser.minDecibels = -90
+      analyser.maxDecibels = -10
       source.connect(analyser)
       analyserRef.current = analyser
 
-      const timeData = new Uint8Array(analyser.fftSize)
-      const freqData = new Uint8Array(analyser.frequencyBinCount)
-
+      const timeData = new Float32Array(analyser.fftSize)
       let smoothedLevel = 0
-      // Optimal internal calibrated gain for crisp voice detection without slider
-      const calibratedGain = 1.65
+      let lastUiUpdate = 0
 
       const updateLevel = () => {
-        if (!analyserRef.current) return
-
-        // 1. Time-domain RMS (instantaneous sound pressure)
-        analyserRef.current.getByteTimeDomainData(timeData)
+        if (requestId !== micRequestIdRef.current || !analyserRef.current) return
+        analyserRef.current.getFloatTimeDomainData(timeData)
         let sumSquares = 0
-        let peakDeviation = 0
         for (let i = 0; i < timeData.length; i++) {
-          const norm = (timeData[i] - 128) / 128
-          sumSquares += norm * norm
-          const abs = Math.abs(norm)
-          if (abs > peakDeviation) peakDeviation = abs
+          sumSquares += timeData[i] * timeData[i]
         }
         const rms = Math.sqrt(sumSquares / timeData.length)
-
-        // 2. Frequency spectrum (voice fundamentals & formants ~100Hz - 3500Hz)
-        analyserRef.current.getByteFrequencyData(freqData)
-
-        // Compute 24 distinct equalizer frequency bands
-        const numBands = 24
-        const bands = []
-        const binStep = Math.max(1, Math.floor(Math.min(96, freqData.length) / numBands))
-        for (let b = 0; b < numBands; b++) {
-          const startBin = 1 + b * binStep
-          let sum = 0
-          for (let k = 0; k < binStep; k++) {
-            sum += freqData[startBin + k] || 0
-          }
-          const avg = sum / binStep
-          // Perceptual logarithmic-like height scaling (8% floor, 100% ceiling)
-          const bandHeight = Math.min(100, Math.max(8, Math.round(Math.sqrt(avg / 255) * 100 * calibratedGain)))
-          bands.push(bandHeight)
-        }
-        setMicFrequencies(bands)
-
-        // Perceptual overall volume with square root curve
-        const rmsScaled = Math.min(100, Math.round(Math.sqrt(rms) * 260 * calibratedGain))
-        const peakScaled = Math.min(100, Math.round(peakDeviation * 140 * calibratedGain))
-        const bandsMax = Math.max(...bands)
-        const rawLevel = Math.max(rmsScaled, Math.round(bandsMax * 0.9), peakScaled)
-
+        const db = rms > 0 ? 20 * Math.log10(rms) : -90
+        const dbClamped = Math.max(-60, Math.min(0, db))
+        const rawLevel = Math.round(((dbClamped + 60) / 60) * 100)
         if (rawLevel > smoothedLevel) {
-          smoothedLevel = rawLevel // immediate attack
+          smoothedLevel += (rawLevel - smoothedLevel) * 0.55
         } else {
-          smoothedLevel = Math.max(0, Math.round(smoothedLevel * 0.82)) // smooth release
+          smoothedLevel += (rawLevel - smoothedLevel) * 0.18
+        }
+        const now = Date.now()
+        if (now - lastUiUpdate >= 50) {
+          setMicAudioLevel(Math.round(smoothedLevel))
+          setMicLevelDb(Math.round(dbClamped))
+          lastUiUpdate = now
         }
 
-        setMicAudioLevel(smoothedLevel)
-
-        // Automatically pass audio check once real speech or sound is picked up
-        if (smoothedLevel >= 12 || peakDeviation > 0.05) {
+        if (db > -45) {
+          speechDetectedSinceRef.current ??= now
+        } else {
+          speechDetectedSinceRef.current = null
+        }
+        if (speechDetectedSinceRef.current && now - speechDetectedSinceRef.current >= 350) {
           setAudioCheckPassed(true)
         }
-
         animFrameRef.current = requestAnimationFrame(updateLevel)
       }
       updateLevel()
     } catch (err) {
       console.warn('Microphone access notice:', err.message)
-      setIsMicTesting(false)
+      const friendlyMessage = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError'
+        ? 'Allow microphone access in your browser to continue.'
+        : err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError'
+        ? 'That microphone is unavailable. Choose another input device.'
+        : err.name === 'OverconstrainedError'
+        ? 'That microphone could not be opened. Choose another input device.'
+        : 'The microphone could not be started. Check it and try again.'
+      if (requestId === micRequestIdRef.current) setMicTestError(friendlyMessage)
+      if (requestId === micRequestIdRef.current) {
+        micStreamRef.current?.getTracks().forEach((track) => track.stop())
+        micStreamRef.current = null
+        setIsMicTesting(false)
+      }
     }
   }
 
@@ -243,6 +291,10 @@ export default function InvitationAcceptancePage() {
       if (!isMicTesting && !audioCheckPassed) {
         handleStartMicTest()
       }
+
+      const handleDeviceChange = () => refreshAudioInputDevices()
+      navigator.mediaDevices?.addEventListener?.('devicechange', handleDeviceChange)
+      return () => navigator.mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange)
     }
   }, [currentStage])
 
@@ -275,6 +327,7 @@ export default function InvitationAcceptancePage() {
   // Audio Context & Stream cleanup ONLY on unmount
   useEffect(() => {
     return () => {
+      micRequestIdRef.current += 1
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
       if (audioContextRef.current) audioContextRef.current.close().catch(() => {})
       if (micStreamRef.current) micStreamRef.current.getTracks().forEach((t) => t.stop())
@@ -921,7 +974,9 @@ export default function InvitationAcceptancePage() {
                           </div>
                           <div className="text-xs text-slate-500 mt-0.5 leading-normal">
                             {audioCheckPassed
-                              ? 'Microphone active and clear vocal frequency modulation detected!'
+                              ? 'Microphone is receiving your voice.'
+                              : micTestError
+                              ? micTestError
                               : isMicTesting
                               ? 'Microphone active — speak normally into your microphone...'
                               : 'Starting microphone check automatically...'}
@@ -929,74 +984,71 @@ export default function InvitationAcceptancePage() {
                         </div>
                       </div>
 
-                      {!audioCheckPassed && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (isMicTesting) {
-                              setAudioCheckPassed(true)
-                            } else {
-                              handleStartMicTest()
-                            }
-                          }}
-                          className="px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-xs font-semibold text-slate-700 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                        >
-                          <Volume2 className="w-3.5 h-3.5 text-blue-600" />
-                          <span>{isMicTesting ? 'Verify Sound' : 'Start Mic'}</span>
-                        </button>
-                      )}
                     </div>
 
-                    {/* Live Audio Level Equalizer Console in Light Theme (Slider removed!) */}
-                    <div className="space-y-3 pt-1">
-                      {/* Dynamic 24-Bar Audio Equalizer Console in Crisp Light Theme */}
-                      <div className="h-20 px-4 sm:px-5 py-3 bg-gradient-to-b from-slate-50 via-white to-slate-50/90 rounded-2xl border border-slate-200 shadow-inner flex items-end justify-between gap-1 sm:gap-2 relative overflow-hidden">
-                        <div className="absolute top-2 left-4 flex items-center gap-2 text-[11px] font-mono font-medium text-slate-600">
-                          <span className={`w-2 h-2 rounded-full ${micAudioLevel > 10 ? 'bg-emerald-500 animate-ping' : 'bg-slate-300'}`} />
-                          <span>Acoustic Spectrum (100Hz – 3.5kHz)</span>
-                        </div>
-                        <div className="absolute top-2 right-4 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white border border-slate-200/90 shadow-2xs text-[11px] font-mono font-bold text-blue-700">
-                          <span>{micAudioLevel > 0 ? `${micAudioLevel}% Voice Intensity` : '0% Intensity'}</span>
-                        </div>
+                    <div className="space-y-4 pt-1">
+                      <label className="block space-y-1.5">
+                        <span className="text-xs font-semibold text-slate-700">Microphone input</span>
+                        <select
+                          value={selectedMicId}
+                          onChange={(event) => {
+                            const deviceId = event.target.value
+                            setSelectedMicId(deviceId)
+                            setAudioCheckPassed(false)
+                            handleStartMicTest(deviceId)
+                          }}
+                          disabled={!audioInputDevices.length}
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+                        >
+                          {audioInputDevices.length === 0 && <option value="">Waiting for microphone permission...</option>}
+                          {audioInputDevices.map((device, index) => (
+                            <option key={device.deviceId || `mic-${index}`} value={device.deviceId}>
+                              {device.label || `Microphone ${index + 1}`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
 
-                        {micFrequencies.map((h, i) => (
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-inner">
+                        <div className="mb-3 flex items-center justify-between text-xs">
+                          <span className="font-semibold text-slate-700">Live input level</span>
+                          <span className="font-mono tabular-nums text-slate-500">{isMicTesting ? `${micLevelDb} dB` : 'Mic off'}</span>
+                        </div>
+                        <div
+                          className="h-4 overflow-hidden rounded-full bg-slate-100 ring-1 ring-inset ring-slate-200"
+                          role="meter"
+                          aria-label="Microphone input level"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={micAudioLevel}
+                        >
                           <div
-                            key={i}
-                            className={`flex-1 rounded-t-full transition-all duration-75 ${
-                              audioCheckPassed
-                                ? 'bg-gradient-to-t from-emerald-500 via-teal-400 to-emerald-300 shadow-xs shadow-emerald-500/30'
-                                : micAudioLevel > 10
-                                ? 'bg-gradient-to-t from-blue-600 via-indigo-500 to-cyan-400 shadow-xs shadow-blue-500/30'
-                                : 'bg-slate-200/90 hover:bg-slate-300'
-                            }`}
-                            style={{ height: `${Math.max(8, Math.min(100, h))}%` }}
+                            className={`h-full rounded-full transition-[width] duration-75 ${audioCheckPassed ? 'bg-emerald-500' : micAudioLevel > 70 ? 'bg-amber-400' : 'bg-blue-500'}`}
+                            style={{ width: `${micAudioLevel}%` }}
                           />
-                        ))}
+                        </div>
+                        <div className="mt-2 flex justify-between text-[10px] text-slate-400">
+                          <span>Quiet</span><span>Good level</span><span>Too loud</span>
+                        </div>
+                        <p className="mt-3 min-h-5 text-xs text-slate-600" aria-live="polite">
+                          {micTestError || (audioCheckPassed
+                            ? 'Your voice is reaching the microphone clearly.'
+                            : isMicTesting
+                            ? 'Speak normally to confirm your microphone level.'
+                            : 'Choose a microphone and start the live check.')}
+                        </p>
                       </div>
 
-                      {/* Light-Themed Responsive VU Level Bar */}
-                      <div className="space-y-1.5 pt-1">
-                        <div className="h-2.5 w-full bg-slate-100 border border-slate-200 rounded-full overflow-hidden flex items-center p-0.5">
-                          <div
-                            className={`h-full rounded-full transition-[width] duration-75 ${
-                              audioCheckPassed
-                                ? 'bg-gradient-to-r from-emerald-500 to-teal-500'
-                                : 'bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-500'
-                            }`}
-                            style={{ width: `${Math.max(4, micAudioLevel)}%` }}
-                          />
-                        </div>
-                        <div className="text-xs font-mono text-slate-500 flex items-center justify-between">
-                          <span>
-                            {audioCheckPassed
-                              ? 'Voice signal verified — hardware check passed!'
-                              : micAudioLevel > 10
-                              ? 'Voice detected — calibrating speech clarity...'
-                              : 'Speak into your microphone to verify (or click Verify Sound)...'}
-                          </span>
-                          <span className="font-semibold text-slate-400">Live Acoustic Calibration</span>
-                        </div>
-                      </div>
+                      {(!isMicTesting || micTestError) && (
+                        <button
+                          type="button"
+                          onClick={() => handleStartMicTest(selectedMicId)}
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50"
+                        >
+                          <Volume2 className="h-3.5 w-3.5 text-blue-600" />
+                          {micTestError ? 'Try microphone again' : 'Start microphone check'}
+                        </button>
+                      )}
                     </div>
                   </div>
 

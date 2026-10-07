@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "capture:voice": "node scripts/capture-gemini-native-audio.js",
     "test": "node --test"
   },
   "dependencies": {

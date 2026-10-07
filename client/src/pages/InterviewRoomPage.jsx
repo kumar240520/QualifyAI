@@ -11,6 +11,7 @@ import {
   Maximize2,
   PhoneOff,
   Send,
+  X,
   Mic,
   MicOff,
   Volume2,
@@ -189,6 +190,7 @@ export default function InterviewRoomPage() {
   preventInterruptionRef.current = preventInterruption
   const handleSubmitAnswerRef = useRef(null)
   const lastSpeechActivityTimeRef = useRef(0)
+  const voiceCaptureCancelledRef = useRef(false)
   const lastScheduledTextRef = useRef('')
   const isCandidateTurnLockedRef = useRef(true)
   const lastTypingActivityTimeRef = useRef(0)
@@ -317,7 +319,9 @@ export default function InterviewRoomPage() {
     if (lastSubmittedSequenceRef.current === incomingSeq) {
       lastSubmittedSequenceRef.current = -1
     }
+    setError('')
     setIsSubmitting(false)
+    voiceCaptureCancelledRef.current = false
 
     // STRICT PACING GUARD: Lock candidate turn while AI presents the question!
     // The candidate cannot answer or auto-submit until AI finishes speaking!
@@ -727,8 +731,9 @@ export default function InterviewRoomPage() {
     setError('')
 
     // 1. Add candidate message bubble to dialogue stream immediately
+    const optimisticTurnId = `cand-${Date.now()}`
     const optimisticTurn = {
-      id: `cand-${Date.now()}`,
+      id: optimisticTurnId,
       speaker: 'CANDIDATE',
       content: answerText,
       created_at: new Date().toISOString(),
@@ -736,7 +741,6 @@ export default function InterviewRoomPage() {
     setTranscripts((prev) => [...prev, optimisticTurn])
 
     try {
-      const evalStartTime = Date.now()
       const result = await interviewService.submitAnswer(
         currentSession.id,
         token,
@@ -745,12 +749,6 @@ export default function InterviewRoomPage() {
         currentActiveQuestion?.id,
         inputMode
       )
-
-      // Fast responsive turn: add slight buffer (600ms) only if response returns instantly
-      const elapsed = Date.now() - evalStartTime
-      if (elapsed < 600) {
-        await new Promise((r) => setTimeout(r, 600 - elapsed))
-      }
 
       if (result.session) {
         setSession(result.session)
@@ -787,12 +785,31 @@ export default function InterviewRoomPage() {
     } catch (err) {
       console.warn('Evaluation submission notice:', err.message)
       lastSubmittedSequenceRef.current = -1 // Allow retry on failure
+      setTranscripts((prev) => prev.filter((turn) => turn.id !== optimisticTurnId))
+      setAnswerInputValue(answerText)
+      if (inputMode === 'VOICE') setCandidateInterimText(answerText)
+      setError('I could not finish that response just now. Your answer is still here. Please try submitting it again.')
+      setVoiceState('LISTENING')
     } finally {
       setIsSubmitting(false)
     }
   }
 
   handleSubmitAnswerRef.current = handleSubmitAnswer
+
+  const handleCancelVoiceSubmission = () => {
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current)
+      autoSubmitTimerRef.current = null
+    }
+    voiceCaptureCancelledRef.current = true
+    candidateSpeechBufferRef.current = ''
+    setCandidateInterimText('')
+    lastScheduledTextRef.current = ''
+    lastSpeechActivityTimeRef.current = 0
+    if (voiceEngineRef.current) voiceEngineRef.current.setMute(true)
+    setIsMuted(true)
+  }
 
   // Handle explicit or spoken request to repeat active question aloud
   const handleRepeatCurrentQuestion = () => {
@@ -884,6 +901,7 @@ export default function InterviewRoomPage() {
           onCandidateSpeech: ({ text, isInterim, isFinal }) => {
             // STRICT TURN LOCK: Reject candidate speech while AI is speaking or session submitting/completed
             if (
+              voiceCaptureCancelledRef.current ||
               isCandidateTurnLockedRef.current ||
               voiceStateRef.current === 'SPEAKING' ||
               isSubmittingRef.current ||
@@ -1070,9 +1088,13 @@ export default function InterviewRoomPage() {
     autoMutedForNonDescriptiveRef.current = false
     if (voiceEngineRef.current) {
       const muted = voiceEngineRef.current.toggleMute()
+      if (!muted) voiceCaptureCancelledRef.current = false
       setIsMuted(muted)
     } else {
-      setIsMuted((prev) => !prev)
+      setIsMuted((prev) => {
+        if (prev) voiceCaptureCancelledRef.current = false
+        return !prev
+      })
     }
   }
 
@@ -1429,6 +1451,11 @@ export default function InterviewRoomPage() {
 
             {/* Right Region: Active Question Panel & Dynamic Interaction Area */}
             <div className="lg:col-span-7 h-full flex flex-col justify-between overflow-hidden gap-3.5">
+              {error && (
+                <div role="alert" className="shrink-0 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800">
+                  {error}
+                </div>
+              )}
               {/* Pinned Top Question Banner / Dialogue Box with SMS Thread */}
               <ActiveQuestionPanel
                 question={activeQuestion}
@@ -1536,25 +1563,37 @@ export default function InterviewRoomPage() {
                         <span className="text-[10px] text-blue-700 font-sans hidden sm:inline font-medium bg-blue-100/80 px-2.5 py-1 rounded-lg border border-blue-200">
                           Auto-submits in 6s on pause
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => handleSubmitAnswer(candidateInterimText, 'VOICE')}
-                          disabled={isSubmitting}
-                          className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-sans font-semibold text-xs transition shadow-md shadow-blue-500/20 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
-                          title="Submit response immediately without waiting for silence timer"
-                        >
-                          {isSubmitting ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>Submitting...</span>
-                            </>
-                          ) : (
-                            <>
-                              <span>Submit Response</span>
-                              <Send className="w-3.5 h-3.5" />
-                            </>
-                          )}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleCancelVoiceSubmission}
+                            disabled={isSubmitting}
+                            className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-sans font-semibold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            title="Cancel this voice response and edit or re-enter it"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>Cancel</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSubmitAnswer(candidateInterimText, 'VOICE')}
+                            disabled={isSubmitting}
+                            className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-sans font-semibold text-xs transition shadow-md shadow-blue-500/20 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
+                            title="Submit response immediately without waiting for silence timer"
+                          >
+                            {isSubmitting ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Submitting...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>Submit Response</span>
+                                <Send className="w-3.5 h-3.5" />
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : isMuted ? (
