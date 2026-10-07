@@ -3,6 +3,9 @@ import { GoogleGenAI } from '@google/genai'
 import { getServiceSupabaseClient } from '../../integrations/supabaseClient.js'
 import { interviewEngineService } from '../interview/interviewEngineService.js'
 import { config } from '../../config/env.js'
+import { DEFAULT_VOICE_PROFILE, getVoiceProfile } from './voiceProfile.js'
+import { cleanTextForSpeech } from './speechSegmenter.js'
+import { ttsManager } from './providers/TTSManager.js'
 
 let _gatewayInstance = null
 
@@ -162,9 +165,6 @@ export class VoiceGateway {
   /**
    * Deliver spoken audio turn directly to candidate for a given session
    */
-  /**
-   * Deliver spoken audio turn directly to candidate for a given session
-   */
   async speakPromptToSession(sessionIdOrInterviewId, textToSpeak, force = false) {
     if (!textToSpeak) return
 
@@ -173,7 +173,7 @@ export class VoiceGateway {
         (ctx.sessionId === sessionIdOrInterviewId || ctx.interviewId === sessionIdOrInterviewId) &&
         ws.readyState === 1
       ) {
-        const cleanPrompt = textToSpeak.trim()
+        const cleanPrompt = cleanTextForSpeech(textToSpeak)
         if (!cleanPrompt) continue
 
         // Deduplication guard: ignore identical prompts delivered within 8 seconds unless forced (e.g. repeat request)
@@ -188,7 +188,8 @@ export class VoiceGateway {
         ctx.hasEmittedTurnForCurrentInput = false
         ctx.fallbackEmitted = false
 
-        const promptInstruction = `Speak the following exact words aloud directly to candidate ${ctx.candidateName}: "${cleanPrompt}". Speak in a warm, professional conversational voice. Do NOT add any extra thoughts, preambles, or meta labels.`
+        const interviewerName = ctx.voiceProfile?.interviewerName || 'Sarah'
+        const promptInstruction = `Speak the following message aloud directly to candidate ${ctx.candidateName} with natural human recruiter warmth, engaging inflection, and conversational pacing: "${cleanPrompt}". Do NOT add any extra thoughts, preambles, or meta labels.`
 
         // If geminiSession is not connected (e.g. idle timeout disconnected it), quickly reconnect
         if (!ctx.geminiSession && !ctx.isConnectingGemini) {
@@ -199,21 +200,13 @@ export class VoiceGateway {
 
         if (ctx.geminiSession?.sendClientContent) {
           if (ctx.turnWatchdog) clearTimeout(ctx.turnWatchdog)
-          // 5-second fast watchdog: if Gemini Live fails to emit audio within 5s, trigger instant fallback
+          // 12-second watchdog: gives Gemini Live ample time to stream natural 24kHz audio
           ctx.turnWatchdog = setTimeout(async () => {
             if (!ctx.hasEmittedTurnForCurrentInput && ws.readyState === 1) {
-              console.warn(`[VoiceGateway] Gemini Live question speech timeout (5s). Triggering fallback audio turn...`)
-              await this._generateAIFallbackTurn(
-                ctx,
-                cleanPrompt,
-                ws,
-                getServiceSupabaseClient(),
-                { id: ctx.interviewId },
-                { full_name: ctx.candidateName },
-                ctx.job || { title: 'Software Engineer' }
-              )
+              console.warn(`[VoiceGateway] Gemini Live question speech timeout (12s). Attempting secondary voice synthesis...`)
+              await this._deliverFallbackAudioOrTurn(ctx, cleanPrompt, ws)
             }
-          }, 5000)
+          }, 12000)
 
           try {
             ctx.geminiSession.sendClientContent({
@@ -228,30 +221,85 @@ export class VoiceGateway {
           } catch (err) {
             console.warn('[VoiceGateway] sendClientContent error in speakPromptToSession:', err.message)
             if (ctx.turnWatchdog) clearTimeout(ctx.turnWatchdog)
-            this._generateAIFallbackTurn(
-              ctx,
-              cleanPrompt,
-              ws,
-              getServiceSupabaseClient(),
-              { id: ctx.interviewId },
-              { full_name: ctx.candidateName },
-              ctx.job || { title: 'Software Engineer' }
-            )
+            await this._deliverFallbackAudioOrTurn(ctx, cleanPrompt, ws)
           }
         } else {
-          // Gemini Live unavailable -> instant fallback so user never experiences silence
-          this._generateAIFallbackTurn(
-            ctx,
-            cleanPrompt,
-            ws,
-            getServiceSupabaseClient(),
-            { id: ctx.interviewId },
-            { full_name: ctx.candidateName },
-            ctx.job || { title: 'Software Engineer' }
-          )
+          // Gemini Live unavailable -> secondary TTS or resilient fallback turn
+          await this._deliverFallbackAudioOrTurn(ctx, cleanPrompt, ws)
         }
       }
     }
+  }
+
+  /**
+   * Resilient Fallback: Delivers local 24kHz audio (Kokoro) or client turn packet if all else fails
+   */
+  async _deliverFallbackAudioOrTurn(ctx, textToSpeak, ws) {
+    if (!ws || ws.readyState !== 1) return
+    const cleanPrompt = cleanTextForSpeech(textToSpeak)
+    if (!cleanPrompt) return
+
+    try {
+      console.log(`[VoiceGateway] Attempting secondary TTS fallback for "${cleanPrompt.substring(0, 40)}..."`)
+      let streamedChunks = 0
+      ctx.isAiSpeaking = true
+      ctx.hasEmittedTurnForCurrentInput = true
+
+      await ttsManager.synthesize({
+        text: cleanPrompt,
+        voiceProfile: ctx.voiceProfile || DEFAULT_VOICE_PROFILE,
+        preferredProvider: 'kokoro_local',
+        timeoutMs: 12000,
+        onChunk: (chunk) => {
+          streamedChunks++
+          if (ws.readyState === 1) {
+            ws.send(
+              JSON.stringify({
+                type: 'ai_audio_chunk',
+                data: chunk.data,
+                mimeType: chunk.mimeType || 'audio/pcm;rate=24000',
+                chunkIndex: chunk.chunkIndex || streamedChunks,
+                sampleRate: chunk.sampleRate || 24000,
+                channels: 1,
+                bitDepth: 16,
+                timestamp: Date.now(),
+              })
+            )
+          }
+        },
+      })
+
+      if (streamedChunks > 0 && ws.readyState === 1) {
+        ctx.isAiSpeaking = false
+        ws.send(
+          JSON.stringify({
+            type: 'ai_turn_complete',
+            sessionId: ctx.sessionId,
+            eventId: `${ctx.sessionId}-fallback-voice-${Date.now()}`,
+            fullTranscript: cleanPrompt,
+            questionText: extractQuestionText(cleanPrompt) || cleanPrompt,
+            isNudge: isNudgeText(cleanPrompt),
+            isTermination: isTerminationText(cleanPrompt),
+            questionSequence: ctx.currentQuestionSequence || 0,
+            isFallback: false, // Emitted real 24kHz PCM audio, so client shouldn't use browser synth!
+          })
+        )
+        return
+      }
+    } catch (fallbackErr) {
+      console.warn('[VoiceGateway] Kokoro/secondary TTS fallback failed:', fallbackErr.message)
+    }
+
+    // Tertiary: send browser SpeechSynthesis turn fallback
+    await this._generateAIFallbackTurn(
+      ctx,
+      cleanPrompt,
+      ws,
+      getServiceSupabaseClient(),
+      { id: ctx.interviewId },
+      { full_name: ctx.candidateName },
+      ctx.job || { title: 'Software Engineer' }
+    )
   }
 
   /**
@@ -339,6 +387,7 @@ export class VoiceGateway {
       const session = canonicalState.session
 
       // 5. Initialize active session context immediately
+      const voiceProfile = DEFAULT_VOICE_PROFILE
       const sessionContext = {
         interviewId: interview.id,
         sessionId: session.id,
@@ -352,6 +401,7 @@ export class VoiceGateway {
         preventAiInterruption: true, // Default: Prevent false interruption from background noise/speaker echo
         currentAudioChunkIndex: 0,
         job,
+        voiceProfile,
       }
       this.activeSessions.set(ws, sessionContext)
 
@@ -485,25 +535,34 @@ export class VoiceGateway {
     try {
       const ai = new GoogleGenAI({ apiKey: config.gemini.apiKey })
       const candidateName = sessionContext.candidateName || 'Candidate'
-      const systemPrompt = `You are a voice renderer for QualifyAI. You do not conduct the interview, evaluate answers, choose topics, or generate questions. Speak only the exact text in explicit speak requests to candidate ${candidateName}. Do not add a question, acknowledgement, greeting, or follow-up. Do not react to microphone audio. Never output internal thoughts or meta text.`
+      const voiceProfile = sessionContext.voiceProfile || DEFAULT_VOICE_PROFILE
+      const interviewerName = voiceProfile.interviewerName || 'Sarah'
+
+      const systemPrompt = `You are ${interviewerName}, a warm, highly professional senior technical interviewer at QualifyAI. Your vocal delivery must sound authentically human, welcoming, engaging, and articulate. Speak with natural conversational melody, varied cadence, and appropriate vocal pauses. Speak only the exact text in explicit speak requests to candidate ${candidateName}. Do not add unprompted questions, acknowledgements, greetings, or follow-ups. Do not react to background microphone audio. Never output internal thoughts, chain-of-thought tokens, or meta text.`
 
       let currentAITranscript = ''
       let geminiSession = null
-      const liveModels = ['gemini-2.5-flash-native-audio-latest', 'gemini-3.8-live']
+      const liveModels = [
+        voiceProfile.geminiModel || 'models/gemini-2.5-flash-native-audio-latest',
+        ...(voiceProfile.fallbackModels || []),
+        'gemini-2.5-flash-native-audio-latest',
+      ]
+      const uniqueModels = [...new Set(liveModels)]
 
-      for (const modelCandidate of liveModels) {
+      for (const modelCandidate of uniqueModels) {
         try {
-          console.log(`[VoiceGateway] Connecting to Gemini Live with model: ${modelCandidate}`)
+          console.log(`[VoiceGateway] Connecting to Gemini Live with model: ${modelCandidate}, voice: ${voiceProfile.geminiVoice}`)
           geminiSession = await ai.live.connect({
             model: modelCandidate,
             config: {
               responseModalities: ['AUDIO'],
+              thinkingConfig: { thinkingBudget: 0 },
               outputAudioTranscription: {},
               inputAudioTranscription: {},
               speechConfig: {
                 voiceConfig: {
                   prebuiltVoiceConfig: {
-                    voiceName: 'Puck',
+                    voiceName: voiceProfile.geminiVoice || 'Aoede',
                   },
                 },
               },

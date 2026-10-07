@@ -637,12 +637,15 @@ export class VoiceInterviewEngine {
               }
             }, Math.ceil((remainingSec + 0.12) * 1000))
           } else if ('speechSynthesis' in window && msg.fullTranscript) {
-            // Immediate Fallback: Speak aloud via SpeechSynthesis whenever Gemini Live native audio is absent in this turn!
+            // Immediate Fallback: Speak aloud via SpeechSynthesis whenever native audio is absent in this turn
             try {
               window.speechSynthesis.cancel()
               const utterance = new SpeechSynthesisUtterance(msg.fullTranscript)
               utterance.lang = this.language || 'en-IN'
-              utterance.rate = 1.02
+              const bestVoice = this._getPreferredSpeechVoice()
+              if (bestVoice) utterance.voice = bestVoice
+              utterance.rate = 0.98
+              utterance.pitch = 1.0
 
               this._updateState('SPEAKING')
               this.isAutoMutedWhileSpeaking = true
@@ -745,7 +748,10 @@ export class VoiceInterviewEngine {
         window.speechSynthesis.cancel()
         const utterance = new SpeechSynthesisUtterance(spokenText)
         utterance.lang = this.language || 'en-IN'
-        utterance.rate = 1.02
+        const bestVoice = this._getPreferredSpeechVoice()
+        if (bestVoice) utterance.voice = bestVoice
+        utterance.rate = 0.98
+        utterance.pitch = 1.0
 
         this._updateState('SPEAKING')
         this.isAutoMutedWhileSpeaking = true
@@ -764,6 +770,43 @@ export class VoiceInterviewEngine {
         console.warn('[VoiceEngine] speakAiQuestion speech error:', err)
       }
     }
+  }
+
+  /**
+   * Selects the most natural, human-like voice available in the browser for fallback turns
+   */
+  _getPreferredSpeechVoice() {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null
+    const voices = window.speechSynthesis.getVoices()
+    if (!voices || voices.length === 0) return null
+
+    // 1. Look for high-fidelity natural online/neural voices first
+    const naturalVoices = voices.filter(
+      (v) =>
+        (v.name.includes('Natural') || v.name.includes('Online') || v.name.includes('Neural')) &&
+        (v.lang.startsWith('en') || (this.language && v.lang.startsWith(this.language.substring(0, 2))))
+    )
+    if (naturalVoices.length > 0) {
+      const femaleNatural = naturalVoices.find(
+        (v) => /jenny|aria|sonia|neerja|samantha|zira|steffi|sara/i.test(v.name)
+      )
+      if (femaleNatural) return femaleNatural
+      return naturalVoices[0]
+    }
+
+    // 2. Look for Google / Apple high quality voices
+    const qualityVoices = voices.filter(
+      (v) =>
+        (v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Siri')) &&
+        v.lang.startsWith('en')
+    )
+    if (qualityVoices.length > 0) return qualityVoices[0]
+
+    // 3. Fallback to any English female voice, or first English voice
+    const femaleVoice = voices.find((v) => /female|woman|zira|susan|hazel/i.test(v.name) && v.lang.startsWith('en'))
+    if (femaleVoice) return femaleVoice
+
+    return voices.find((v) => v.lang.startsWith('en')) || voices[0]
   }
 
   /**
