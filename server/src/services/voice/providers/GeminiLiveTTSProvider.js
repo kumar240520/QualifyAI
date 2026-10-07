@@ -50,24 +50,26 @@ export class GeminiLiveTTSProvider extends TTSProvider {
     let chunkCount = 0
     let fullTranscript = ''
 
-    const systemInstruction = `You are ${interviewerName}, a warm, highly professional senior technical interviewer at QualifyAI. Your speech must sound authentically human, welcoming, engaging, and articulate. Speak with natural conversational melody, varied cadence, and appropriate vocal inflection. Speak only the exact question or feedback provided. Never include internal thoughts, planning notes, or meta tags.`
+    const systemInstruction = `You are ${interviewerName}, a warm, highly professional senior technical interviewer at QualifyAI. Your vocal delivery must sound authentically human, welcoming, engaging, and articulate. Speak at an unhurried, relaxed pace with a warm, grounded pitch and natural conversational melody. Avoid fast speech, high-pitched tones, or metallic robotic delivery. Speak with comfortable pauses between clauses and warm, genuine inflection. Speak only the exact question or feedback provided. Never include internal thoughts, planning notes, or meta tags.`
 
     const segments = segmentSpeech(cleanedText)
     const structuredText = segments.join('\n\n')
 
     const promptText = segments.length > 1
       ? `Deliver the following interview message aloud to the candidate.
+Speak at a relaxed, measured pace with a warm, grounded pitch (do not rush or use a high-pitched, metallic, or flat robotic tone).
 Maintain consistent vocal warmth, natural conversational cadence, and engaging melody throughout, especially on the final sentence.
 Delivery instructions:
-- Pause naturally between sentences as a real human interviewer does.
-- Maintain full pitch variation and expressive vocal energy from the opening words through to the very last word.
+- Speak slightly slower, at an unhurried, thoughtful tempo.
+- Pause naturally between sentences as a thoughtful human interviewer does.
+- Maintain full pitch variation, warm resonance, and vocal energy from the opening words through to the very last word.
 - Do not rush or flatten your intonation on the final sentence.
 - If the final sentence is a question, ask it with curious, inviting cadence.
 - Do not add any preamble, meta notes, or commentary.
 
 Message to deliver:
 ${structuredText}`
-      : `Speak the following message aloud to the candidate with natural human recruiter warmth and cadence: "${cleanedText}"`
+      : `Speak the following message aloud directly to the candidate at a calm, unhurried pace with a warm, grounded pitch and conversational inflection (avoid rushed or high-pitched delivery): "${cleanedText}". Do NOT add any extra thoughts, preambles, or meta labels.`
 
     return new Promise((resolve, reject) => {
       let settled = false
@@ -111,23 +113,7 @@ ${structuredText}`
         },
         callbacks: {
           onopen: () => {
-            try {
-              session.sendClientContent({
-                turns: [
-                  {
-                    role: 'user',
-                    parts: [{ text: promptText }],
-                  },
-                ],
-                turnComplete: true,
-              })
-            } catch (err) {
-              if (!settled) {
-                settled = true
-                clearTimeout(timeoutId)
-                reject(err)
-              }
-            }
+            // Handshake open
           },
           onmessage: (msg) => {
             if (settled) return
@@ -197,6 +183,23 @@ ${structuredText}`
         },
       }).then((s) => {
         session = s
+        try {
+          session.sendClientContent({
+            turns: [
+              {
+                role: 'user',
+                parts: [{ text: promptText }],
+              },
+            ],
+            turnComplete: true,
+          })
+        } catch (err) {
+          if (!settled) {
+            settled = true
+            clearTimeout(timeoutId)
+            reject(err)
+          }
+        }
       }).catch((err) => {
         if (!settled) {
           settled = true

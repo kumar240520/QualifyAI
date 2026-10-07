@@ -76,22 +76,27 @@ export class KokoroTTSProvider extends TTSProvider {
     console.log(`[KokoroTTSProvider] Synthesizing ${segments.length} prosodic segment(s) with voice "${voice}": "${cleanedText.substring(0, 40)}..."`)
 
     const sampleRate = 24000
-    // Natural 200ms human conversational breathing pause between sentences
-    const pauseSamples = Math.round(sampleRate * 0.20)
+    const speed = Number(voiceProfile?.speed) || 0.88
+    const pauseSamples = Math.round(sampleRate * 0.25) // 250ms natural breathing pause
     const pauseBuffer = new Float32Array(pauseSamples)
     const collectedSlices = []
 
-    for (let sIdx = 0; sIdx < segments.length; sIdx++) {
+    // For texts up to ~800 chars (standard interview prompts and paragraphs),
+    // synthesize as one cohesive utterance so Kokoro preserves consistent tone,
+    // natural clause-to-clause prosody, and authentic inflection on final questions.
+    const speechBlocks = cleanedText.length <= 800 ? [cleanedText] : segments
+
+    for (let sIdx = 0; sIdx < speechBlocks.length; sIdx++) {
       if (signal?.aborted) {
         throw new Error('Synthesis aborted')
       }
-      const segText = segments[sIdx].trim()
-      if (!segText) continue
+      const blockText = speechBlocks[sIdx].trim()
+      if (!blockText) continue
 
-      const result = await tts.generate(segText, { voice })
+      const result = await tts.generate(blockText, { voice, speed })
       const segAudio = result.audio
       if (segAudio && segAudio.length > 0) {
-        // Micro-fade boundaries of each sentence (48 samples) to prevent inter-sentence clicks
+        // Micro-fade boundaries of each sentence/block (48 samples) to prevent inter-sentence clicks
         const fadeLen = Math.min(48, Math.floor(segAudio.length / 4))
         for (let k = 0; k < fadeLen; k++) {
           const factor = 0.5 * (1 - Math.cos((Math.PI * k) / fadeLen))
@@ -100,8 +105,8 @@ export class KokoroTTSProvider extends TTSProvider {
         }
         collectedSlices.push(segAudio)
 
-        // Insert conversational breathing pause between sentences (except after the final sentence)
-        if (sIdx < segments.length - 1) {
+        // Insert conversational breathing pause between blocks (if split)
+        if (sIdx < speechBlocks.length - 1) {
           collectedSlices.push(pauseBuffer)
         }
       }
@@ -120,14 +125,14 @@ export class KokoroTTSProvider extends TTSProvider {
       offset += slice.length
     }
 
-    // 1. Peak Normalization & Headroom Guard (-1.0 dBFS / ~0.92 peak target)
+    // 1. Peak Normalization & Headroom Guard (-1.0 dBFS / ~0.90 peak target)
     // Prevents harsh digital clipping and flat-topping distortion during vowel formants
     let maxPeak = 0
     for (let k = 0; k < float32Data.length; k++) {
       const abs = Math.abs(float32Data[k])
       if (abs > maxPeak) maxPeak = abs
     }
-    const targetPeak = 0.92
+    const targetPeak = 0.90
     const gain = maxPeak > targetPeak ? targetPeak / maxPeak : 1.0
 
     // 2. Micro-fade onset and offset of full stream (64 samples) to prevent DC step clicks
@@ -140,7 +145,7 @@ export class KokoroTTSProvider extends TTSProvider {
       }
     }
 
-    const chunkSize = Math.max(1, Math.round(sampleRate / 10))
+    const chunkSize = Math.max(1, Math.round((sampleRate * 120) / 1000))
     let chunkCount = 0
 
     for (let i = 0; i < float32Data.length; i += chunkSize) {

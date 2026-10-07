@@ -12,7 +12,8 @@ export const VOICE_PROFILES = {
     tone: 'warm',
     style: 'conversational',
     energy: 'moderate',
-    pace: 'natural',
+    pace: 'unhurried',
+    speed: 0.88, // 12% slower for relaxed, thoughtful, natural recruiter cadence
     expressiveness: 'high',
     formality: 'professional',
     geminiVoice: 'Aoede',
@@ -31,7 +32,8 @@ export const VOICE_PROFILES = {
     tone: 'warm',
     style: 'conversational',
     energy: 'moderate',
-    pace: 'natural',
+    pace: 'unhurried',
+    speed: 0.88,
     expressiveness: 'high',
     formality: 'professional',
     geminiVoice: 'Charon', // Warm, deep, authoritative male interviewer voice

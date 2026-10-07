@@ -1,5 +1,5 @@
-const DEFAULT_BLOCK_MS = 100
-const DEFAULT_PREBUFFER_MS = 160
+const DEFAULT_BLOCK_MS = 120
+const DEFAULT_PREBUFFER_MS = 200
 const SAFETY_BUFFER_SECONDS = 0.06
 
 function decodeBase64(base64) {
@@ -18,6 +18,7 @@ export class AIInterviewAudioPlayer {
     AudioContextClass = null,
     blockMs = DEFAULT_BLOCK_MS,
     prebufferMs = DEFAULT_PREBUFFER_MS,
+    playbackRate = 0.95,
   } = {}) {
     this.AudioContextClass = AudioContextClass
     this.onPlaybackStart = onPlaybackStart
@@ -25,6 +26,8 @@ export class AIInterviewAudioPlayer {
     this.onError = onError
     this.blockMs = blockMs
     this.prebufferSeconds = prebufferMs / 1000
+    this.playbackRate = playbackRate // Relaxed speed (0.95x) and grounded, warm lower pitch
+    this.vocalChain = null
     this.audioContext = null
     this.resumePromise = null
     this.state = 'IDLE'
@@ -297,10 +300,32 @@ export class AIInterviewAudioPlayer {
       this.queueSeconds = Math.max(0, this.queueSeconds - buffer.duration)
       const source = this.audioContext.createBufferSource()
       source.buffer = buffer
-      source.connect(this.audioContext.destination)
-      const startAt = Math.max(this.audioContext.currentTime + SAFETY_BUFFER_SECONDS, this.scheduledUntil)
+
+      const hasRate = source.playbackRate != null
+      const rate = hasRate ? (this.playbackRate || 0.95) : 1
+      if (hasRate) {
+        if (typeof source.playbackRate.setValueAtTime === 'function') {
+          source.playbackRate.setValueAtTime(rate, this.audioContext.currentTime)
+        } else {
+          source.playbackRate.value = rate
+        }
+      }
+
+      const chain = this._ensureVocalWarmthChain()
+      if (chain?.input) {
+        source.connect(chain.input)
+      } else {
+        source.connect(this.audioContext.destination)
+      }
+
+      const effectiveDuration = buffer.duration / rate
+      const now = this.audioContext.currentTime
+      // Seamlessly tile buffers: if timeline is actively running into the future, attach directly at scheduledUntil
+      // Only add SAFETY_BUFFER_SECONDS during cold start or after an actual buffer underrun
+      const hasActiveTimeline = this.scheduledUntil > (now + 0.005)
+      const startAt = hasActiveTimeline ? this.scheduledUntil : Math.max(now + SAFETY_BUFFER_SECONDS, this.scheduledUntil)
       source.start(startAt)
-      this.scheduledUntil = startAt + buffer.duration
+      this.scheduledUntil = startAt + effectiveDuration
       this.activeSources.add(source)
       source.onended = () => {
         this.activeSources.delete(source)
@@ -308,6 +333,53 @@ export class AIInterviewAudioPlayer {
         this._maybeCompletePlayback()
       }
       this.underrunOpen = false
+    }
+  }
+
+  _ensureVocalWarmthChain() {
+    if (!this.audioContext || this.audioContext.state === 'closed') return null
+    if (typeof this.audioContext.createBiquadFilter !== 'function' || typeof this.audioContext.createGain !== 'function') return null
+    if (this.vocalChain) return this.vocalChain
+
+    try {
+      // 1. Studio Anti-Metallic Lowpass Filter (7200Hz, Butterworth Q=0.707)
+      // Smooths out harsh high-frequency quantization hash above 7.2kHz
+      const lowpass = this.audioContext.createBiquadFilter()
+      lowpass.type = 'lowpass'
+      lowpass.frequency.setValueAtTime(7200, this.audioContext.currentTime)
+      lowpass.Q.setValueAtTime(0.707, this.audioContext.currentTime)
+
+      // 2. Chest Resonance / Vocal Body Boost (200Hz, +2.0dB)
+      // Restores human chest resonance and warmth to prevent thin electronic tone
+      const bodyBoost = this.audioContext.createBiquadFilter()
+      bodyBoost.type = 'peaking'
+      bodyBoost.frequency.setValueAtTime(200, this.audioContext.currentTime)
+      bodyBoost.Q.setValueAtTime(1.0, this.audioContext.currentTime)
+      bodyBoost.gain.setValueAtTime(2.0, this.audioContext.currentTime)
+
+      // 3. De-Harshness Mid Cut (3200Hz, -1.8dB)
+      // Tames metallic sibilance bite in the 3kHz-3.5kHz range
+      const deHarsh = this.audioContext.createBiquadFilter()
+      deHarsh.type = 'peaking'
+      deHarsh.frequency.setValueAtTime(3200, this.audioContext.currentTime)
+      deHarsh.Q.setValueAtTime(1.2, this.audioContext.currentTime)
+      deHarsh.gain.setValueAtTime(-1.8, this.audioContext.currentTime)
+
+      // 4. Master Output Gain
+      const gainNode = this.audioContext.createGain()
+      gainNode.gain.setValueAtTime(1.0, this.audioContext.currentTime)
+
+      // Connect: lowpass -> bodyBoost -> deHarsh -> gainNode -> destination
+      lowpass.connect(bodyBoost)
+      bodyBoost.connect(deHarsh)
+      deHarsh.connect(gainNode)
+      gainNode.connect(this.audioContext.destination)
+
+      this.vocalChain = { input: lowpass, lowpass, bodyBoost, deHarsh, gainNode }
+      return this.vocalChain
+    } catch (err) {
+      console.warn('[AIInterviewAudioPlayer] Vocal warmth chain fallback:', err.message)
+      return null
     }
   }
 
@@ -397,6 +469,7 @@ export class AIInterviewAudioPlayer {
     this.isDestroyed = true
     if (this.audioContext && this.audioContext.state !== 'closed') await this.audioContext.close()
     this.audioContext = null
+    this.vocalChain = null
     this.state = 'DESTROYED'
   }
 

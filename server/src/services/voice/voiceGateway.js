@@ -235,17 +235,19 @@ export class VoiceGateway {
 
         const promptInstruction = segments.length > 1
           ? `Deliver the following interview message aloud to candidate ${ctx.candidateName}.
+Speak at a relaxed, measured pace with a warm, grounded pitch (do not rush or use a high-pitched, metallic, or flat robotic tone).
 Maintain consistent vocal warmth, natural conversational cadence, and engaging melody throughout, especially on the final sentence.
 Delivery instructions:
-- Pause naturally between sentences as a real human interviewer does.
-- Maintain full pitch variation and expressive vocal energy from the opening words through to the very last word.
+- Speak slightly slower, at an unhurried, thoughtful tempo.
+- Pause naturally between sentences as a thoughtful human interviewer does.
+- Maintain full pitch variation, warm resonance, and vocal energy from the opening words through to the very last word.
 - Do not rush or flatten your intonation on the final sentence.
 - If the final sentence is a question, ask it with curious, inviting cadence.
-- Do not add any preamble, meta text, or thoughts.
+- Do not add any preamble, meta text, or commentary.
 
 Message to speak:
 ${structuredText}`
-          : `Speak the following message aloud directly to candidate ${ctx.candidateName} with natural human recruiter warmth, engaging inflection, and conversational pacing: "${cleanPrompt}". Do NOT add any extra thoughts, preambles, or meta labels.`
+          : `Speak the following message aloud directly to candidate ${ctx.candidateName} at a calm, unhurried pace with a warm, grounded pitch and conversational inflection (avoid rushed or high-pitched delivery): "${cleanPrompt}". Do NOT add any extra thoughts, preambles, or meta labels.`
 
         // If geminiSession is not connected (e.g. idle timeout disconnected it), quickly reconnect
         if (!ctx.geminiSession && !ctx.isConnectingGemini) {
@@ -630,7 +632,7 @@ ${structuredText}`
       const voiceProfile = sessionContext.voiceProfile || DEFAULT_VOICE_PROFILE
       const interviewerName = voiceProfile.interviewerName || 'Sarah'
 
-      const systemPrompt = `You are ${interviewerName}, a warm, highly professional senior technical interviewer at QualifyAI. Your vocal delivery must sound authentically human, welcoming, engaging, and articulate. Speak with natural conversational melody, varied cadence, and appropriate vocal pauses. Speak only the exact text in explicit speak requests to candidate ${candidateName}. Do not add unprompted questions, acknowledgements, greetings, or follow-ups. Do not react to background microphone audio. Never output internal thoughts, chain-of-thought tokens, or meta text.`
+      const systemPrompt = `You are ${interviewerName}, a warm, highly professional senior technical interviewer at QualifyAI. Your vocal delivery must sound authentically human, welcoming, engaging, and articulate. Speak at an unhurried, relaxed pace with a warm, grounded pitch and natural conversational melody. Avoid fast speech, high-pitched tones, or metallic robotic delivery. Speak with comfortable pauses between clauses and warm, genuine inflection. Speak only the exact text in explicit speak requests to candidate ${candidateName}. Do not add unprompted questions, acknowledgements, greetings, or follow-ups. Do not react to background microphone audio. Never output internal thoughts, chain-of-thought tokens, or meta text.`
 
       let geminiSession = null
       const liveModels = [
@@ -664,11 +666,6 @@ ${structuredText}`
             callbacks: {
               onopen: () => {
                 console.log(`[VoiceGateway] Gemini Live session open (${modelCandidate})`)
-                sessionContext.geminiSession = geminiSession
-                sessionContext.isConnectingGemini = false
-                if (ws.readyState === 1) {
-                  ws.send(JSON.stringify({ type: 'session_ready' }))
-                }
               },
               onmessage: async (msg) => {
                 if (sessionContext.fallbackEmitted) return
@@ -876,6 +873,9 @@ ${structuredText}`
           sessionContext.geminiSession = geminiSession
           sessionContext.isConnectingGemini = false
           console.log(`[VoiceGateway] Gemini Live successfully connected with ${modelCandidate}`)
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'session_ready' }))
+          }
           break
         } catch (modelErr) {
           console.warn(`[VoiceGateway] Model ${modelCandidate} connection failed:`, modelErr.message)
