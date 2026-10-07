@@ -404,8 +404,8 @@ export class VoiceGateway {
             case 'trigger_nudge': {
               const nudgeIndex = packet.nudgeIndex || 1
               const nudgePrompt = nudgeIndex === 1
-                ? `Are you there? I'm here whenever you're ready.`
-                : `If you're ready, we can move on to the next question.`
+                ? `I am here, take your time. You can just tell me or submit when you are done.`
+                : `Whenever you're ready, feel free to submit your solution, or we can move on to the next question.`
 
               this.speakPromptToSession(ctx.sessionId, nudgePrompt)
               break

@@ -1,5 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Sparkles, HelpCircle, Code2, Database, CheckSquare, Layers, Award, Terminal, Volume2 } from 'lucide-react'
+import {
+  Sparkles,
+  HelpCircle,
+  Code2,
+  Database,
+  CheckSquare,
+  Layers,
+  Award,
+  Terminal,
+  Volume2,
+  MessageSquare,
+  Check,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react'
+import { isThoughtOrMetaPlanning } from '../../utils/questionNormalizer.js'
 
 export default function ActiveQuestionPanel({
   question,
@@ -9,7 +24,12 @@ export default function ActiveQuestionPanel({
   criterionName = null,
   liveAiSpeech = '',
   isAiSpeaking = false,
+  transcripts = [],
+  candidateName = 'You',
 }) {
+  const [showSmsHistory, setShowSmsHistory] = useState(false)
+  const chatScrollRef = useRef(null)
+
   const diffColors = {
     EASY: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     MEDIUM: 'bg-blue-50 text-blue-700 border-blue-200',
@@ -34,6 +54,17 @@ export default function ActiveQuestionPanel({
 
   // Target text is strictly the real technical question prompt
   const targetText = question?.text || ''
+
+  // Filter out any internal thought traces or empty turns
+  const filteredTranscripts = (transcripts || []).filter(
+    (t) => t.content && !isThoughtOrMetaPlanning(t.content)
+  )
+
+  useEffect(() => {
+    if (showSmsHistory) {
+      chatScrollRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [showSmsHistory, filteredTranscripts.length])
 
   return (
     <div className="relative p-5 rounded-3xl bg-white border border-slate-200/90 shadow-2xs overflow-hidden space-y-3">
@@ -77,11 +108,26 @@ export default function ActiveQuestionPanel({
           )}
         </div>
 
-        {criterionName && (
-          <span className="text-xs font-sans font-medium text-slate-600 bg-slate-50 border border-slate-200/80 px-3 py-1 rounded-xl tracking-normal truncate max-w-[240px] shadow-2xs" title={criterionName}>
-            Pillar: <strong className="font-semibold text-slate-800">{criterionName}</strong>
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {criterionName && (
+            <span className="text-xs font-sans font-medium text-slate-600 bg-slate-50 border border-slate-200/80 px-3 py-1 rounded-xl tracking-normal truncate max-w-[200px] shadow-2xs" title={criterionName}>
+              Pillar: <strong className="font-semibold text-slate-800">{criterionName}</strong>
+            </span>
+          )}
+
+          {filteredTranscripts.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowSmsHistory((prev) => !prev)}
+              className="flex items-center gap-1.5 text-xs font-sans font-medium px-2.5 py-1 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition cursor-pointer shadow-2xs"
+              title="Toggle SMS Conversation Stream"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+              <span>SMS Thread ({filteredTranscripts.length})</span>
+              {showSmsHistory ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Active Question Prompt Display (Instantly Synchronized with Spoken Delivery) */}
@@ -132,6 +178,53 @@ export default function ActiveQuestionPanel({
                       <span>{rule}</span>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* SMS-Style Dialogue Stream Thread (Records AI questions & Candidate responses including MCQs) */}
+            {showSmsHistory && filteredTranscripts.length > 0 && (
+              <div className="pt-2 border-t border-slate-100 space-y-2 animate-fade-in">
+                <div className="flex items-center justify-between text-[11px] font-sans font-semibold text-slate-500 px-1">
+                  <span className="flex items-center gap-1.5 text-slate-700">
+                    <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+                    <span>SMS Conversation History</span>
+                  </span>
+                  <span className="text-[10px] font-mono text-slate-400">
+                    {filteredTranscripts.length} exchanges recorded
+                  </span>
+                </div>
+                <div className="max-h-44 sm:max-h-52 overflow-y-auto space-y-2.5 p-3 rounded-2xl bg-slate-50/80 border border-slate-200/80">
+                  {filteredTranscripts.map((t, idx) => {
+                    const isAI = t.speaker === 'AI'
+                    return (
+                      <div
+                        key={t.id || idx}
+                        className={`flex flex-col ${isAI ? 'items-start' : 'items-end'} space-y-0.5`}
+                      >
+                        <div className="flex items-center gap-1 text-[10px] font-sans text-slate-400 px-1">
+                          <span className="font-semibold text-slate-600">
+                            {isAI ? 'QualifyAI' : candidateName}
+                          </span>
+                          {!isAI && (
+                            <span className="text-emerald-600 font-semibold flex items-center gap-0.5 ml-1">
+                              <Check className="w-3 h-3" /> Sent
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className={`max-w-[85%] p-2.5 rounded-2xl text-[11px] sm:text-xs leading-relaxed shadow-2xs break-words ${
+                            isAI
+                              ? 'bg-white text-slate-800 border border-slate-200/90 rounded-tl-xs'
+                              : 'bg-blue-600 text-white rounded-tr-xs'
+                          }`}
+                        >
+                          {t.content}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <div ref={chatScrollRef} />
                 </div>
               </div>
             )}

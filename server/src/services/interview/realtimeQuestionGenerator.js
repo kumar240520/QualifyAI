@@ -106,7 +106,7 @@ ${JSON.stringify(recentQuestions)}
 TIME: ${JSON.stringify({ interviewDurationMinutes, remainingSeconds: timeRemainingSeconds, remainingMinutes: Math.ceil(timeRemainingSeconds / 60) })}
 NEXT QUESTION SEQUENCE: ${sequence}
 
-Return one structured decision. For a question, choose a type appropriate to the evidence and return the active question text separately from the conversational aiMessage. The reason is internal audit metadata. For basedOnQuestionId: set to "${currentQuestion?.id || 'null'}" when following up on the current question, or null if switching topic or no current question. Pick a rubricCriterionId only when the question assesses that criterion. Never invent a question bank or follow a predetermined progression.`
+Return one structured decision. For a question, choose a type appropriate to the evidence and return the active question text. The conversational aiMessage must be the complete spoken interviewer delivery that includes both the brief transition/acknowledgement AND reads the full question aloud to the candidate. The reason is internal audit metadata. For basedOnQuestionId: set to "${currentQuestion?.id || 'null'}" when following up on the current question, or null if switching topic or no current question. Pick a rubricCriterionId only when the question assesses that criterion. Never invent a question bank or follow a predetermined progression.`
 
     const schema = {
       type: 'object',

@@ -42,13 +42,27 @@ export const interviewEngineService = {
 
     const codeSnippet = generated.codeSnippet || generated.code_snippet || null
 
+    const feedbackMsg = decision.aiMessage?.trim() || ''
+    const questionText = generated.text.trim()
+    let fullSpokenLeadIn = questionText
+
+    if (feedbackMsg) {
+      const cleanFeedback = feedbackMsg.replace(/^[A-Z\s]+:\s*/, '').trim()
+      const cleanQuestionStart = questionText.toLowerCase().substring(0, 30)
+      if (!cleanFeedback.toLowerCase().includes(cleanQuestionStart)) {
+        fullSpokenLeadIn = `${cleanFeedback} ${questionText}`
+      } else {
+        fullSpokenLeadIn = cleanFeedback
+      }
+    }
+
     return {
       id: randomUUID(),
       sessionId,
       timestamp: new Date().toISOString(),
       sequence,
-      question_text: generated.text.trim(),
-      spoken_lead_in: decision.aiMessage?.trim() || generated.text.trim(),
+      question_text: questionText,
+      spoken_lead_in: fullSpokenLeadIn,
       type: generated.type,
       difficulty: generated.difficulty || 'MEDIUM',
       rubric_criterion_id: generated.rubricCriterionId || null,
@@ -911,6 +925,7 @@ export const interviewEngineService = {
       question: dynamicQuestion,
       aiMessage: spokenPrompt,
       remainingSeconds: timeCheck.remainingSeconds,
+      speakAloud: true,
       timestamp: new Date().toISOString(),
     }
 

@@ -12,6 +12,7 @@ import {
   PhoneOff,
   Send,
   Mic,
+  MicOff,
   Volume2,
 } from 'lucide-react'
 import { interviewService } from '../services/interviewService.js'
@@ -106,6 +107,8 @@ export default function InterviewRoomPage() {
   const lastSpeechActivityTimeRef = useRef(0)
   const lastScheduledTextRef = useRef('')
   const isCandidateTurnLockedRef = useRef(true)
+  const lastTypingActivityTimeRef = useRef(0)
+  const autoMutedForCodingRef = useRef(false)
 
   // 2-second warmup buffer after arriving in room before AI speaks
   const [roomStartupCountdown, setRoomStartupCountdown] = useState(2)
@@ -198,6 +201,22 @@ export default function InterviewRoomPage() {
     const normalized = normalizeQuestion(qObj, qText, incomingSeq)
     setActiveQuestion(normalized)
 
+    // Record authoritative AI Question into transcripts SMS dialogue stream
+    setTranscripts((prev) => {
+      const alreadyHas = prev.some((t) => t.sequence === incomingSeq && t.speaker === 'AI')
+      if (alreadyHas) return prev
+      return [
+        ...prev,
+        {
+          id: `ai-q-${incomingSeq}-${Date.now()}`,
+          speaker: 'AI',
+          sequence: incomingSeq,
+          content: qText || qObj.spoken_lead_in || '',
+          created_at: new Date().toISOString(),
+        },
+      ]
+    })
+
     // Clear autoSubmitTimer if active
     if (autoSubmitTimerRef.current) {
       clearTimeout(autoSubmitTimerRef.current)
@@ -231,17 +250,35 @@ export default function InterviewRoomPage() {
       voiceEngineRef.current.resetCandidateSpeechRecognition()
     }
 
+    // Transition check: if new question is non-coding and previously auto-muted for coding, restore mic
+    const incomingType = normalized?.type || qObj?.type
+    const isNewCoding = ['CODE_WRITING', 'CODE_OUTPUT', 'SQL'].includes(incomingType)
+    if (!isNewCoding && autoMutedForCodingRef.current) {
+      console.log('[InterviewRoom] Transitioning to non-coding question. Restoring unmuted microphone.')
+      autoMutedForCodingRef.current = false
+      if (voiceEngineRef.current) {
+        voiceEngineRef.current.setMute(false)
+      }
+      setIsMuted(false)
+    }
+
     // Deliver spoken lead-in if voice engine is active and speakAloud is requested
     const spokenLeadIn = qObj.spoken_lead_in || qText
     setLiveAiSpeech(spokenLeadIn)
 
-    if (voiceEngineRef.current && spokenLeadIn && event.speakAloud) {
+    if (voiceEngineRef.current && spokenLeadIn && event.speakAloud !== false) {
       voiceEngineRef.current.speakAiQuestion(spokenLeadIn)
-    } else if (!event.speakAloud) {
-      // If voice engine is not speaking aloud, unlock candidate after brief reading delay (1.5s)
+    } else if (event.speakAloud === false) {
+      // If voice engine is explicitly not speaking aloud, unlock candidate after brief reading delay (1.5s)
       setTimeout(() => {
         isCandidateTurnLockedRef.current = false
-        setVoiceState('LISTENING')
+        if (isNewCoding) {
+          autoMutedForCodingRef.current = true
+          if (voiceEngineRef.current) voiceEngineRef.current.setMute(true)
+          setIsMuted(true)
+        } else {
+          setVoiceState('LISTENING')
+        }
       }, 1500)
     }
   }
@@ -291,6 +328,19 @@ export default function InterviewRoomPage() {
         setLiveAiSpeech(data.currentQuestion?.spoken_lead_in || initialQ)
         isCandidateTurnLockedRef.current = true
         setVoiceState('SPEAKING')
+
+        setTranscripts((prev) => {
+          if (prev.length > 0) return prev
+          return [
+            {
+              id: `ai-q-0-${Date.now()}`,
+              speaker: 'AI',
+              sequence: 0,
+              content: initialQ,
+              created_at: new Date().toISOString(),
+            },
+          ]
+        })
       }
 
       setRemainingSeconds(data.remainingSeconds ?? data.session?.remaining_seconds ?? 0)
@@ -411,17 +461,15 @@ export default function InterviewRoomPage() {
         return
       }
 
-      // If AI is speaking, candidate is speaking, candidate is typing, or submitting: reset silence
-      const hasActiveTyping =
-        typeof answerInputValue === 'string'
-          ? answerInputValue.trim().length > 0
-          : answerInputValue && Boolean(answerInputValue.text || answerInputValue.code || answerInputValue.sqlQuery)
+      // Active typing activity watchdog:
+      // If candidate was actively typing within the last 25 seconds, reset silence timer!
+      const hasRecentTyping = (Date.now() - (lastTypingActivityTimeRef.current || 0)) < 25000
 
       if (
         voiceState === 'SPEAKING' ||
         audioLevel > 0.20 ||
         candidateInterimText ||
-        hasActiveTyping ||
+        hasRecentTyping ||
         isSubmitting
       ) {
         setSilenceSeconds(0)
@@ -514,12 +562,28 @@ export default function InterviewRoomPage() {
     if (typeof payloadOrText === 'string') {
       answerText = payloadOrText.trim()
     } else if (payloadOrText && typeof payloadOrText === 'object') {
-      answerText = (payloadOrText.text || payloadOrText.label || payloadOrText.code || payloadOrText.sqlQuery || payloadOrText.predictedOutput || '').trim()
+      if (payloadOrText.selectedOptionId || payloadOrText.key) {
+        const optKey = payloadOrText.key ? `Option ${payloadOrText.key}: ` : ''
+        answerText = `Selected ${optKey}${payloadOrText.label || payloadOrText.text || ''}`.trim()
+      } else if (Array.isArray(payloadOrText.selectedOptionIds) || Array.isArray(payloadOrText.keys)) {
+        answerText = `Selected: ${(payloadOrText.labels || []).join(', ') || payloadOrText.text || ''}`.trim()
+      } else {
+        answerText = (payloadOrText.text || payloadOrText.label || payloadOrText.code || payloadOrText.sqlQuery || payloadOrText.predictedOutput || '').trim()
+      }
     } else {
-      const fallback = typeof answerInputValue === 'string'
-        ? answerInputValue
-        : answerInputValue?.text || answerInputValue?.label || answerInputValue?.code || ''
-      answerText = (fallback || candidateSpeechBufferRef.current || candidateInterimText || '').trim()
+      if (answerInputValue && typeof answerInputValue === 'object') {
+        if (answerInputValue.selectedOptionId || answerInputValue.key) {
+          const optKey = answerInputValue.key ? `Option ${answerInputValue.key}: ` : ''
+          answerText = `Selected ${optKey}${answerInputValue.label || answerInputValue.text || ''}`.trim()
+        } else {
+          answerText = (answerInputValue.text || answerInputValue.label || answerInputValue.code || answerInputValue.sqlQuery || '').trim()
+        }
+      } else {
+        const fallback = typeof answerInputValue === 'string'
+          ? answerInputValue
+          : answerInputValue?.text || answerInputValue?.label || answerInputValue?.code || ''
+        answerText = (fallback || candidateSpeechBufferRef.current || candidateInterimText || '').trim()
+      }
     }
 
     const currentSession = sessionRef.current || session
@@ -633,11 +697,24 @@ export default function InterviewRoomPage() {
           onAiSpeakingConcluded: () => {
             console.log('[InterviewRoom] AI speaking concluded. Candidate turn unlocked.')
             isCandidateTurnLockedRef.current = false
-            setVoiceState('LISTENING')
             candidateSpeechBufferRef.current = ''
             setCandidateInterimText('')
             lastSpeechActivityTimeRef.current = 0
             lastScheduledTextRef.current = ''
+
+            // Auto-mute candidate microphone on coding/output questions so typing clatter & background sounds don't auto-submit!
+            const currentQ = activeQuestionRef.current
+            const isCoding = ['CODE_WRITING', 'CODE_OUTPUT', 'SQL'].includes(currentQ?.type)
+            if (isCoding) {
+              console.log('[InterviewRoom] Coding question detected. Auto-muting microphone for quiet focus.')
+              autoMutedForCodingRef.current = true
+              if (voiceEngineRef.current) {
+                voiceEngineRef.current.setMute(true)
+              }
+              setIsMuted(true)
+            } else {
+              setVoiceState('LISTENING')
+            }
           },
           onAiQuestion: (event) => {
             console.log('[InterviewRoom] Received authoritative ai_question via WebSocket:', event.sequence)
@@ -800,9 +877,12 @@ export default function InterviewRoomPage() {
   }, [token, isCompleted, isLoading, Boolean(session?.id)])
 
   const handleToggleMute = () => {
+    autoMutedForCodingRef.current = false
     if (voiceEngineRef.current) {
       const muted = voiceEngineRef.current.toggleMute()
       setIsMuted(muted)
+    } else {
+      setIsMuted((prev) => !prev)
     }
   }
 
@@ -917,9 +997,9 @@ export default function InterviewRoomPage() {
 
   // Silence Nudge Hint Text
   const silenceNudgeText = nudgeCount === 1 && voiceState !== 'SPEAKING'
-    ? "Are you there? I'm here whenever you're ready."
+    ? "I am here, take your time. You can just tell me or submit when you are done."
     : nudgeCount === 2 && voiceState !== 'SPEAKING'
-    ? "If you're ready, we can move on to the next question."
+    ? "Whenever you're ready, feel free to submit your solution, or we can move on to the next question."
     : null
 
   return (
@@ -1159,7 +1239,7 @@ export default function InterviewRoomPage() {
 
             {/* Right Region: Active Question Panel & Dynamic Interaction Area */}
             <div className="lg:col-span-7 h-full flex flex-col justify-between overflow-hidden gap-3.5">
-              {/* Pinned Top Question Banner */}
+              {/* Pinned Top Question Banner / Dialogue Box with SMS Thread */}
               <ActiveQuestionPanel
                 question={activeQuestion}
                 sequence={sequence}
@@ -1167,9 +1247,11 @@ export default function InterviewRoomPage() {
                 criterionName={activeQuestion?.metadata?.rubric_focus || null}
                 liveAiSpeech={liveAiSpeech}
                 isAiSpeaking={voiceState === 'SPEAKING'}
+                transcripts={transcripts}
+                candidateName={candidate?.full_name || 'You'}
               />
 
-              {/* Dynamic Interaction Area with QuestionRenderer */}
+              {/* Dynamic Interaction Area */}
               <div className="flex-1 min-h-0 bg-white/70 backdrop-blur-xs rounded-3xl border border-slate-200/90 p-4 sm:p-5 flex flex-col justify-between overflow-y-auto shadow-2xs">
                 {wrapUpStarted && (
                   <section className="mb-3 p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-950 shrink-0">
@@ -1216,24 +1298,8 @@ export default function InterviewRoomPage() {
                   </section>
                 )}
 
-                {/* Dynamic Question Type Surface */}
-                <div className="flex-1 flex flex-col justify-center">
-                  <QuestionRenderer
-                    question={activeQuestion}
-                    value={answerInputValue}
-                    candidateSpeech={candidateInterimText}
-                    onChange={(val) => {
-                      setAnswerInputValue(val)
-                      setSilenceSeconds(0)
-                    }}
-                    onSubmit={(payload) => handleSubmitAnswer(payload)}
-                    isSubmitting={isSubmitting}
-                    isAiSpeaking={voiceState === 'SPEAKING' || roomStartupCountdown > 0}
-                  />
-                </div>
-
-                {/* Unified Candidate Response Status & Explicit Submit Bar (Always Accessible) */}
-                <div className="mt-3.5 shrink-0">
+                {/* 1. Transcriber Box & Submit Bar (Moved UPWARD, between Dialogue Box and Text Box) */}
+                <div className="mb-3.5 shrink-0">
                   {voiceState === 'SPEAKING' || roomStartupCountdown > 0 ? (
                     <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-50 border border-slate-200 text-slate-700 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
                       <div className="flex items-center gap-2.5 overflow-hidden flex-1">
@@ -1300,6 +1366,75 @@ export default function InterviewRoomPage() {
                         </button>
                       </div>
                     </div>
+                  ) : isMuted ? (
+                    <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-50/75 border border-amber-200/90 text-amber-950 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs animate-fade-in">
+                      <div className="flex items-center gap-2.5 overflow-hidden flex-1">
+                        <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 border border-amber-200">
+                          <MicOff className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="font-sans font-bold text-[11px] text-amber-800 uppercase tracking-normal flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                            <span>
+                              {['CODE_WRITING', 'CODE_OUTPUT', 'SQL'].includes(activeQuestion?.type)
+                                ? 'Microphone Muted (Coding Mode)'
+                                : 'Microphone Muted'}
+                            </span>
+                          </div>
+                          <p className="text-amber-900/80 font-sans text-xs mt-0.5">
+                            {['CODE_WRITING', 'CODE_OUTPUT', 'SQL'].includes(activeQuestion?.type)
+                              ? 'Focus on writing your solution below. Typing clatter will not auto-submit. Click "Unmute Mic" anytime to speak.'
+                              : 'Microphone is currently muted. Click "Unmute Mic" if you want to answer aloud.'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleToggleMute}
+                          className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-amber-100/60 border border-amber-300 text-amber-900 font-sans font-semibold text-xs transition shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                          title="Unmute microphone"
+                        >
+                          <Mic className="w-3.5 h-3.5" />
+                          <span>Unmute Mic</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const textToSubmit = answerInputValue || candidateInterimText
+                            if (textToSubmit) {
+                              handleSubmitAnswer(textToSubmit, 'TEXT')
+                            }
+                          }}
+                          disabled={
+                            isSubmitting ||
+                            !(
+                              typeof answerInputValue === 'string'
+                                ? answerInputValue.trim().length > 0
+                                : answerInputValue &&
+                                  (answerInputValue.code ||
+                                    answerInputValue.text ||
+                                    answerInputValue.sqlQuery ||
+                                    answerInputValue.predictedOutput)
+                            )
+                          }
+                          className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-sans font-semibold text-xs transition shadow-md shadow-blue-500/20 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="Submit your response to the AI interviewer"
+                        >
+                          {isSubmitting ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Submitting...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>Submit Response</span>
+                              <Send className="w-3.5 h-3.5" />
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-50 border border-slate-200/90 text-slate-700 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
                       <div className="flex items-center gap-2.5 overflow-hidden flex-1">
@@ -1313,8 +1448,8 @@ export default function InterviewRoomPage() {
                           </div>
                           <p className="text-slate-600 font-sans text-xs mt-0.5">
                             {answerInputValue
-                              ? 'Response entered above. Click "Submit Response" when ready.'
-                              : 'Speak aloud into your microphone or write your answer above.'}
+                              ? 'Response entered below. Click "Submit Response" when ready.'
+                              : 'Speak aloud into your microphone or write your answer below.'}
                           </p>
                         </div>
                       </div>
@@ -1346,6 +1481,23 @@ export default function InterviewRoomPage() {
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* 2. Text Box / Interactive Workspace (Placed BELOW the Transcriber Box) */}
+                <div className="flex-1 flex flex-col justify-center">
+                  <QuestionRenderer
+                    question={activeQuestion}
+                    value={answerInputValue}
+                    candidateSpeech={candidateInterimText}
+                    onChange={(val) => {
+                      setAnswerInputValue(val)
+                      lastTypingActivityTimeRef.current = Date.now()
+                      setSilenceSeconds(0)
+                    }}
+                    onSubmit={(payload) => handleSubmitAnswer(payload)}
+                    isSubmitting={isSubmitting}
+                    isAiSpeaking={voiceState === 'SPEAKING' || roomStartupCountdown > 0}
+                  />
                 </div>
               </div>
             </div>

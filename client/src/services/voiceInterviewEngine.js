@@ -1154,6 +1154,19 @@ export class VoiceInterviewEngine {
   }
 
   /**
+   * Set candidate microphone mute state explicitly (e.g. auto-mute for coding questions)
+   */
+  setMute(muted) {
+    this.isManualMuted = Boolean(muted)
+    this.isMuted = this.isManualMuted
+    if (!this.isAutoMutedWhileSpeaking) {
+      this._muteMicrophoneHardware(this.isMuted)
+    }
+    this._updateState(this.isMuted ? 'MUTED' : (this.isAutoMutedWhileSpeaking ? 'SPEAKING' : 'LISTENING'))
+    return this.isMuted
+  }
+
+  /**
    * Terminate voice session and release hardware resources
    */
   stop() {
