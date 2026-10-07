@@ -109,6 +109,7 @@ export default function InterviewRoomPage() {
   const isCandidateTurnLockedRef = useRef(true)
   const lastTypingActivityTimeRef = useRef(0)
   const autoMutedForCodingRef = useRef(false)
+  const liveAiSpeechStreamRef = useRef('')
 
   // 2-second warmup buffer after arriving in room before AI speaks
   const [roomStartupCountdown, setRoomStartupCountdown] = useState(2)
@@ -265,8 +266,9 @@ export default function InterviewRoomPage() {
     // Deliver spoken lead-in if voice engine is active and speakAloud is requested
     const spokenLeadIn = qObj.spoken_lead_in || qText
     setLiveAiSpeech(spokenLeadIn)
+    liveAiSpeechStreamRef.current = ''
 
-    if (voiceEngineRef.current && spokenLeadIn && event.speakAloud !== false) {
+    if (voiceEngineRef.current && spokenLeadIn && event.speakAloud !== false && !event.alreadyTriggeredOnServer) {
       voiceEngineRef.current.speakAiQuestion(spokenLeadIn)
     } else if (event.speakAloud === false) {
       // If voice engine is explicitly not speaking aloud, unlock candidate after brief reading delay (1.5s)
@@ -697,6 +699,8 @@ export default function InterviewRoomPage() {
           onAiSpeakingConcluded: () => {
             console.log('[InterviewRoom] AI speaking concluded. Candidate turn unlocked.')
             isCandidateTurnLockedRef.current = false
+            setLiveAiSpeech('') // Clear temporary spoken banner so question is not written twice on panel!
+            liveAiSpeechStreamRef.current = ''
             candidateSpeechBufferRef.current = ''
             setCandidateInterimText('')
             lastSpeechActivityTimeRef.current = 0
@@ -790,16 +794,22 @@ export default function InterviewRoomPage() {
               if (!cleanText) return
 
               if (isDelta) {
-                // Dynamically accumulate streaming text tokens as the AI speaks aloud
-                setLiveAiSpeech((prev) => (prev ? `${prev} ${cleanText}` : cleanText))
+                // Accumulate streaming text tokens into liveAiSpeechStreamRef from fresh buffer
+                // NEVER append to prev (which already held spokenLeadIn and caused the duplication in the user screenshot)!
+                liveAiSpeechStreamRef.current = liveAiSpeechStreamRef.current
+                  ? `${liveAiSpeechStreamRef.current} ${cleanText}`
+                  : cleanText
+                setLiveAiSpeech(liveAiSpeechStreamRef.current)
                 return
               }
 
               if (isFinal) {
                 setSilenceSeconds(0)
-                if (cleanText) {
-                  setLiveAiSpeech(cleanText)
+                const finalText = cleanText || liveAiSpeechStreamRef.current
+                if (finalText) {
+                  setLiveAiSpeech(finalText)
                 }
+                liveAiSpeechStreamRef.current = ''
 
                 // STRICT ARCHITECTURAL INVARIANT:
                 // onTranscript NEVER overwrites activeQuestion!

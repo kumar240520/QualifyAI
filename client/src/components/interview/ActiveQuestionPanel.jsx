@@ -148,8 +148,8 @@ export default function ActiveQuestionPanel({
               {targetText || 'Loading active question...'}
             </h2>
 
-            {/* Live Spoken Transcript (What the AI says displayed clearly on the right title bar) */}
-            {(isAiSpeaking || liveAiSpeech) && (
+            {/* Live Spoken Transcript (Only displayed while AI is actively speaking aloud) */}
+            {Boolean(isAiSpeaking && (liveAiSpeech || question?.spoken_lead_in)) && (
               <div className="p-3.5 rounded-2xl bg-gradient-to-r from-blue-50/95 via-indigo-50/90 to-slate-50 border border-blue-200/90 text-blue-950 text-xs flex items-start gap-2.5 shadow-2xs animate-fade-in">
                 <Volume2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5 animate-pulse" />
                 <div className="flex-1 space-y-1">
@@ -158,7 +158,7 @@ export default function ActiveQuestionPanel({
                     <span>AI Interviewer Speaking Aloud</span>
                   </div>
                   <p className="text-xs sm:text-[13px] text-slate-800 leading-relaxed font-sans italic font-medium">
-                    &ldquo;{liveAiSpeech || question?.spoken_lead_in || targetText}&rdquo;
+                    &ldquo;{liveAiSpeech || question?.spoken_lead_in}&rdquo;
                   </p>
                 </div>
               </div>

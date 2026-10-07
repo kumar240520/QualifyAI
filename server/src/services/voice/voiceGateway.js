@@ -162,7 +162,10 @@ export class VoiceGateway {
   /**
    * Deliver spoken audio turn directly to candidate for a given session
    */
-  speakPromptToSession(sessionIdOrInterviewId, textToSpeak) {
+  /**
+   * Deliver spoken audio turn directly to candidate for a given session
+   */
+  async speakPromptToSession(sessionIdOrInterviewId, textToSpeak) {
     if (!textToSpeak) return
 
     for (const [ws, ctx] of this.activeSessions.entries()) {
@@ -170,20 +173,39 @@ export class VoiceGateway {
         (ctx.sessionId === sessionIdOrInterviewId || ctx.interviewId === sessionIdOrInterviewId) &&
         ws.readyState === 1
       ) {
-        console.log(`[VoiceGateway] Spoken prompt delivery to ${ctx.candidateName}: "${textToSpeak.substring(0, 50)}..."`)
+        const cleanPrompt = textToSpeak.trim()
+        if (!cleanPrompt) continue
+
+        // Deduplication guard: ignore identical prompts delivered within 8 seconds to prevent reading the question twice!
+        if (ctx.lastSpokenText === cleanPrompt && (Date.now() - (ctx.lastSpokenTime || 0)) < 8000) {
+          console.log(`[VoiceGateway] Deduplicating identical spoken prompt within 8s for ${ctx.candidateName}: "${cleanPrompt.substring(0, 40)}..."`)
+          return
+        }
+        ctx.lastSpokenText = cleanPrompt
+        ctx.lastSpokenTime = Date.now()
+
+        console.log(`[VoiceGateway] Spoken prompt delivery to ${ctx.candidateName}: "${cleanPrompt.substring(0, 50)}..."`)
         ctx.hasEmittedTurnForCurrentInput = false
         ctx.fallbackEmitted = false
 
-        const promptInstruction = `Speak the following exact words aloud directly to candidate ${ctx.candidateName}: "${textToSpeak}". Speak in a warm, professional conversational voice. Do NOT add any extra thoughts, preambles, or meta labels.`
+        const promptInstruction = `Speak the following exact words aloud directly to candidate ${ctx.candidateName}: "${cleanPrompt}". Speak in a warm, professional conversational voice. Do NOT add any extra thoughts, preambles, or meta labels.`
+
+        // If geminiSession is not connected (e.g. idle timeout disconnected it), quickly reconnect
+        if (!ctx.geminiSession && !ctx.isConnectingGemini) {
+          try {
+            await this._initGeminiLiveSession(ctx, ws)
+          } catch (_) {}
+        }
 
         if (ctx.geminiSession?.sendClientContent) {
           if (ctx.turnWatchdog) clearTimeout(ctx.turnWatchdog)
+          // 5-second fast watchdog: if Gemini Live fails to emit audio within 5s, trigger instant fallback
           ctx.turnWatchdog = setTimeout(async () => {
             if (!ctx.hasEmittedTurnForCurrentInput && ws.readyState === 1) {
-              console.warn(`[VoiceGateway] Gemini Live question speech timeout. Triggering fallback audio turn...`)
+              console.warn(`[VoiceGateway] Gemini Live question speech timeout (5s). Triggering fallback audio turn...`)
               await this._generateAIFallbackTurn(
                 ctx,
-                promptInstruction,
+                cleanPrompt,
                 ws,
                 getServiceSupabaseClient(),
                 { id: ctx.interviewId },
@@ -191,7 +213,7 @@ export class VoiceGateway {
                 ctx.job || { title: 'Software Engineer' }
               )
             }
-          }, 12000)
+          }, 5000)
 
           try {
             ctx.geminiSession.sendClientContent({
@@ -208,7 +230,7 @@ export class VoiceGateway {
             if (ctx.turnWatchdog) clearTimeout(ctx.turnWatchdog)
             this._generateAIFallbackTurn(
               ctx,
-              promptInstruction,
+              cleanPrompt,
               ws,
               getServiceSupabaseClient(),
               { id: ctx.interviewId },
@@ -217,9 +239,10 @@ export class VoiceGateway {
             )
           }
         } else {
+          // Gemini Live unavailable -> instant fallback so user never experiences silence
           this._generateAIFallbackTurn(
             ctx,
-            promptInstruction,
+            cleanPrompt,
             ws,
             getServiceSupabaseClient(),
             { id: ctx.interviewId },
@@ -232,63 +255,39 @@ export class VoiceGateway {
   }
 
   /**
-   * Resilient AI Turn Generator Fallback using Gemini Flash REST API.
+   * Resilient AI Turn Generator Fallback: delivers immediate fallback turn so candidate never hears silence.
    */
-  async _generateAIFallbackTurn(ctx, promptInstruction, ws, supabase, interview, candidate, job) {
+  async _generateAIFallbackTurn(ctx, textToSpeak, ws, supabase, interview, candidate, job) {
     if (!ws || ws.readyState !== 1) return
     ctx.hasEmittedTurnForCurrentInput = true
     ctx.fallbackEmitted = true
 
-    try {
-      const ai = new GoogleGenAI({ apiKey: config.gemini.apiKey })
-      const fallbackModels = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-3.5-flash-lite']
-      let responseText = ''
+    const cleanedCompleted = (textToSpeak || '')
+      .replace(/\*\*.*?\*\*/g, '')
+      .replace(/^[#*]+\s*/gm, '')
+      .replace(/^[A-Z\s]+:\s*/, '')
+      .trim()
 
-      for (const model of fallbackModels) {
-        try {
-          const res = await ai.models.generateContent({
-            model,
-            contents: promptInstruction,
-            config: {
-              systemInstruction: `You are a voice renderer. Speak only the exact words requested in the user message to candidate ${candidate.full_name}. Do not evaluate answers, generate questions, or add any words.`,
-              temperature: 0.7,
-            },
-          })
-          responseText = res.text || ''
-          if (responseText.trim()) break
-        } catch (modelErr) {
-          console.warn(`[VoiceGateway] Fallback model ${model} error:`, modelErr.message)
-        }
-      }
+    if (!cleanedCompleted) return
 
-      const cleanedCompleted = responseText
-        .replace(/\*\*.*?\*\*/g, '')
-        .replace(/^[#*]+\s*/gm, '')
-        .replace(/^[A-Z\s]+:\s*/, '')
-        .trim()
+    const isNudge = isNudgeText(cleanedCompleted)
+    const isTermination = isTerminationText(cleanedCompleted)
+    const questionText = isNudge || isTermination ? '' : extractQuestionText(cleanedCompleted)
 
-      if (!cleanedCompleted) return
-
-      const isNudge = isNudgeText(cleanedCompleted)
-      const isTermination = isTerminationText(cleanedCompleted)
-      const questionText = isNudge || isTermination ? '' : extractQuestionText(cleanedCompleted)
-
-      ws.send(
-        JSON.stringify({
-          type: 'ai_turn_complete',
-          sessionId: ctx.sessionId,
-          eventId: `${ctx.sessionId}-fallback-${Date.now()}`,
-          fullTranscript: cleanedCompleted,
-          questionText: questionText || cleanedCompleted,
-          isNudge,
-          isTermination,
-          questionSequence: ctx.currentQuestionSequence || 0,
-        })
-      )
-      console.log(`[VoiceGateway] Resilient AI turn delivered to ${candidate.full_name}: "${cleanedCompleted.substring(0, 60)}..."`)
-    } catch (err) {
-      console.error('[VoiceGateway] Error generating fallback AI turn:', err)
-    }
+    ws.send(
+      JSON.stringify({
+        type: 'ai_turn_complete',
+        sessionId: ctx.sessionId,
+        eventId: `${ctx.sessionId}-fallback-${Date.now()}`,
+        fullTranscript: cleanedCompleted,
+        questionText: questionText || cleanedCompleted,
+        isNudge,
+        isTermination,
+        isFallback: true,
+        questionSequence: ctx.currentQuestionSequence || 0,
+      })
+    )
+    console.log(`[VoiceGateway] Immediate fallback turn dispatched to ${candidate?.full_name || ctx.candidateName}: "${cleanedCompleted.substring(0, 60)}..."`)
   }
 
   /**
@@ -448,15 +447,46 @@ export class VoiceGateway {
         }
       })
 
-      // 7. Connect to Google Gemini Live Native Audio Session (with multi-model fallback)
-      const ai = new GoogleGenAI({ apiKey: config.gemini.apiKey })
+      ws.on('close', () => {
+        sessionContext.isClosed = true
+        if (sessionContext.turnWatchdog) {
+          clearTimeout(sessionContext.turnWatchdog)
+          sessionContext.turnWatchdog = null
+        }
+        if (sessionContext.geminiSession) {
+          try {
+            sessionContext.geminiSession.close?.()
+          } catch (_) {}
+          sessionContext.geminiSession = null
+        }
+        this.activeSessions.delete(ws)
+      })
 
-      const systemPrompt = `You are a voice renderer for QualifyAI. You do not conduct the interview, evaluate answers, choose topics, or generate questions. Speak only the exact text in explicit speak requests to candidate ${candidate.full_name}. Do not add a question, acknowledgement, greeting, or follow-up. Do not react to microphone audio. Never output internal thoughts or meta text.`
+      // 7. Connect to Google Gemini Live Native Audio Session (with multi-model fallback)
+      await this._initGeminiLiveSession(sessionContext, ws)
+    } catch (connErr) {
+      console.error('[VoiceGateway] Connection handler fatal error:', connErr)
+      try {
+        ws.send(JSON.stringify({ type: 'error', message: connErr.message }))
+        ws.close(1011, 'Internal initialization error')
+      } catch (_) {}
+    }
+  }
+
+  /**
+   * Connect or reconnect Gemini Live session for an active session context
+   */
+  async _initGeminiLiveSession(sessionContext, ws) {
+    if (sessionContext.isConnectingGemini || sessionContext.geminiSession || sessionContext.isClosed) return
+    sessionContext.isConnectingGemini = true
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: config.gemini.apiKey })
+      const candidateName = sessionContext.candidateName || 'Candidate'
+      const systemPrompt = `You are a voice renderer for QualifyAI. You do not conduct the interview, evaluate answers, choose topics, or generate questions. Speak only the exact text in explicit speak requests to candidate ${candidateName}. Do not add a question, acknowledgement, greeting, or follow-up. Do not react to microphone audio. Never output internal thoughts or meta text.`
 
       let currentAITranscript = ''
       let geminiSession = null
-      let usedModel = null
-
       const liveModels = ['gemini-2.5-flash-native-audio-latest', 'gemini-3.8-live']
 
       for (const modelCandidate of liveModels) {
@@ -482,12 +512,14 @@ export class VoiceGateway {
             callbacks: {
               onopen: () => {
                 console.log(`[VoiceGateway] Gemini Live session open (${modelCandidate})`)
-                ws.send(JSON.stringify({ type: 'session_ready' }))
+                sessionContext.geminiSession = geminiSession
+                sessionContext.isConnectingGemini = false
+                if (ws.readyState === 1) {
+                  ws.send(JSON.stringify({ type: 'session_ready' }))
+                }
               },
               onmessage: async (msg) => {
-                if (sessionContext.fallbackEmitted) {
-                  return
-                }
+                if (sessionContext.fallbackEmitted) return
 
                 // 1. Text transcript delta from output audio transcription
                 if (msg.serverContent?.outputTranscription?.text) {
@@ -495,12 +527,14 @@ export class VoiceGateway {
                   if (!isThoughtOrMetaPlanning(textChunk)) {
                     const cleaned = textChunk.replace(/\*\*.*?\*\*/g, '').replace(/^[A-Z\s]+:\s*/, '')
                     currentAITranscript += cleaned
-                    ws.send(
-                      JSON.stringify({
-                        type: 'ai_transcript_delta',
-                        text: cleaned,
-                      })
-                    )
+                    if (ws.readyState === 1) {
+                      ws.send(
+                        JSON.stringify({
+                          type: 'ai_transcript_delta',
+                          text: cleaned,
+                        })
+                      )
+                    }
                   }
                 }
 
@@ -517,23 +551,25 @@ export class VoiceGateway {
                       sessionContext.turnWatchdog = null
                     }
                     sessionContext.currentAudioChunkIndex = (sessionContext.currentAudioChunkIndex || 0) + 1
-                    ws.send(
-                      JSON.stringify({
-                        type: 'ai_audio_chunk',
-                        data: part.inlineData.data,
-                        mimeType: part.inlineData.mimeType,
-                        chunkIndex: sessionContext.currentAudioChunkIndex,
-                        sampleRate: 24000,
-                        channels: 1,
-                        bitDepth: 16,
-                        timestamp: Date.now(),
-                      })
-                    )
+                    if (ws.readyState === 1) {
+                      ws.send(
+                        JSON.stringify({
+                          type: 'ai_audio_chunk',
+                          data: part.inlineData.data,
+                          mimeType: part.inlineData.mimeType,
+                          chunkIndex: sessionContext.currentAudioChunkIndex,
+                          sampleRate: 24000,
+                          channels: 1,
+                          bitDepth: 16,
+                          timestamp: Date.now(),
+                        })
+                      )
+                    }
                   }
 
                   if (part.text && !isThoughtOrMetaPlanning(part.text)) {
                     const cleanedText = part.text.replace(/\*\*.*?\*\*/g, '').replace(/^[A-Z\s]+:\s*/, '')
-                    if (cleanedText) {
+                    if (cleanedText && ws.readyState === 1) {
                       currentAITranscript += cleanedText
                       ws.send(
                         JSON.stringify({
@@ -552,7 +588,9 @@ export class VoiceGateway {
                   } else {
                     console.log(`[VoiceGateway] Gemini Live interrupted by candidate speech. Halting playback.`)
                     sessionContext.isAiSpeaking = false
-                    ws.send(JSON.stringify({ type: 'ai_interrupted' }))
+                    if (ws.readyState === 1) {
+                      ws.send(JSON.stringify({ type: 'ai_interrupted' }))
+                    }
                   }
                 }
 
@@ -572,15 +610,15 @@ export class VoiceGateway {
 
                   currentAITranscript = ''
 
-                  if (cleanedCompleted && !isThoughtOrMetaPlanning(cleanedCompleted)) {
+                  if (cleanedCompleted && !isThoughtOrMetaPlanning(cleanedCompleted) && ws.readyState === 1) {
                     const isNudge = isNudgeText(cleanedCompleted)
                     const isTermination = isTerminationText(cleanedCompleted)
 
                     ws.send(
                       JSON.stringify({
                         type: 'ai_turn_complete',
-                        sessionId: session.id,
-                        eventId: `${session.id}-voice-${Date.now()}`,
+                        sessionId: sessionContext.sessionId,
+                        eventId: `${sessionContext.sessionId}-voice-${Date.now()}`,
                         fullTranscript: cleanedCompleted,
                         isNudge,
                         isTermination,
@@ -592,53 +630,60 @@ export class VoiceGateway {
               },
               onerror: (err) => {
                 sessionContext.isAiSpeaking = false
+                sessionContext.isConnectingGemini = false
                 if (sessionContext.turnWatchdog) {
                   clearTimeout(sessionContext.turnWatchdog)
                   sessionContext.turnWatchdog = null
                 }
                 console.error('[VoiceGateway] Gemini Live error:', err.message || err)
-                ws.send(
-                  JSON.stringify({
-                    type: 'ai_error',
-                    message: err.message || 'Live voice stream error',
-                  })
-                )
+                if (ws.readyState === 1) {
+                  ws.send(
+                    JSON.stringify({
+                      type: 'ai_error',
+                      message: err.message || 'Live voice stream error',
+                    })
+                  )
+                }
               },
               onclose: (e) => {
                 sessionContext.isAiSpeaking = false
                 sessionContext.geminiSession = null
+                sessionContext.isConnectingGemini = false
                 if (sessionContext.turnWatchdog) {
                   clearTimeout(sessionContext.turnWatchdog)
                   sessionContext.turnWatchdog = null
                 }
                 console.log('[VoiceGateway] Gemini Live session closed:', e.reason || e.code)
-                ws.send(
-                  JSON.stringify({
-                    type: 'session_closed',
-                    reason: e.reason || 'Gemini Live disconnected',
-                  })
-                )
+                // Auto-reconnect Gemini Live after idle disconnect so next questions remain responsive!
+                if (ws.readyState === 1 && !sessionContext.isClosed) {
+                  setTimeout(() => {
+                    if (ws.readyState === 1 && !sessionContext.isClosed && !sessionContext.geminiSession) {
+                      console.log('[VoiceGateway] Background reconnecting Gemini Live session...')
+                      this._initGeminiLiveSession(sessionContext, ws).catch((err) => {
+                        console.warn('[VoiceGateway] Background Gemini Live reconnect failed:', err.message)
+                      })
+                    }
+                  }, 1500)
+                }
               },
             },
           })
 
-          usedModel = modelCandidate
           sessionContext.geminiSession = geminiSession
-          console.log(`[VoiceGateway] Gemini Live successfully initialized with ${usedModel}`)
+          sessionContext.isConnectingGemini = false
+          console.log(`[VoiceGateway] Gemini Live successfully connected with ${modelCandidate}`)
           break
         } catch (modelErr) {
           console.warn(`[VoiceGateway] Model ${modelCandidate} connection failed:`, modelErr.message)
         }
       }
 
-      if (!geminiSession) {
+      if (!sessionContext.geminiSession && ws.readyState === 1) {
         console.warn('[VoiceGateway] Gemini Live models unavailable. Running in resilient REST fallback mode.')
         ws.send(JSON.stringify({ type: 'session_ready', mode: 'rest_fallback' }))
       }
-    } catch (connErr) {
-      console.error('[VoiceGateway] Connection handler fatal error:', connErr)
-      ws.send(JSON.stringify({ type: 'error', message: connErr.message }))
-      ws.close(1011, 'Internal initialization error')
+    } finally {
+      sessionContext.isConnectingGemini = false
     }
   }
 }

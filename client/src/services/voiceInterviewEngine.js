@@ -618,10 +618,13 @@ export class VoiceInterviewEngine {
             speaker: 'AI',
           })
 
-          // STRICT SINGLE-VOICE GUARANTEE:
-          // If Gemini Live native audio is active, queued, or already played in this turn/session,
-          // NEVER invoke browser speechSynthesis!
-          if (this.hasReceivedNativeAudioInCurrentTurn || this.hasNativeAudioSession || this.activeSources.length > 0) {
+          // SINGLE-VOICE TURN RESOLUTION:
+          // If native audio was actually received for this turn and not flagged as fallback,
+          // let the Web Audio timeline conclude. Otherwise, immediately use browser SpeechSynthesis!
+          const hasNativeAudioInCurrentTurn =
+            (this.hasReceivedNativeAudioInCurrentTurn || this.activeSources.length > 0) && !msg.isFallback
+
+          if (hasNativeAudioInCurrentTurn) {
             this.hasReceivedNativeAudioInCurrentTurn = false
             this.isAiTurnActive = false
 
@@ -634,7 +637,7 @@ export class VoiceInterviewEngine {
               }
             }, Math.ceil((remainingSec + 0.12) * 1000))
           } else if ('speechSynthesis' in window && msg.fullTranscript) {
-            // Pure REST Fallback Mode ONLY: Only speak aloud via SpeechSynthesis if Gemini Live native audio is completely inactive
+            // Immediate Fallback: Speak aloud via SpeechSynthesis whenever Gemini Live native audio is absent in this turn!
             try {
               window.speechSynthesis.cancel()
               const utterance = new SpeechSynthesisUtterance(msg.fullTranscript)
@@ -724,7 +727,7 @@ export class VoiceInterviewEngine {
   speakAiQuestion(spokenText) {
     if (!spokenText || this.isStopped) return
 
-    // 1. If WebSocket is connected, request Voice Gateway to speak this prompt to the candidate
+    // 1. If WebSocket is connected, request Voice Gateway to deliver the prompt
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(
         JSON.stringify({
@@ -732,10 +735,11 @@ export class VoiceInterviewEngine {
           text: spokenText,
         })
       )
+      return
     }
 
-    // 2. If Gemini Live native audio is NOT active in this session, use browser SpeechSynthesis as fallback
-    if (!this.hasNativeAudioSession && 'speechSynthesis' in window) {
+    // 2. Disconnected / offline fallback ONLY:
+    if ('speechSynthesis' in window) {
       try {
         window.speechSynthesis.cancel()
         const utterance = new SpeechSynthesisUtterance(spokenText)
