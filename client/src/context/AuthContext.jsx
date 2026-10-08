@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { authService } from '../services/authService.js'
+import { API_BASE_URL } from '../services/apiConfig.js'
 
 const AuthContext = createContext(null)
 
@@ -55,11 +56,9 @@ export function AuthProvider({ children }) {
       const org = activeMembership?.organizations
 
       const isOnboarded =
-        profile?.onboarding_completed !== undefined
-          ? profile.onboarding_completed
-          : authUser.user_metadata?.onboarding_completed !== undefined
-          ? authUser.user_metadata.onboarding_completed
-          : localStorage.getItem(`qualifyai_onboarding_${authUser.id}`) === 'true'
+        Boolean(profile?.onboarding_completed) ||
+        Boolean(authUser.user_metadata?.onboarding_completed) ||
+        localStorage.getItem(`qualifyai_onboarding_${authUser.id}`) === 'true'
 
       const fullUser = {
         id: authUser.id,
@@ -98,9 +97,8 @@ export function AuthProvider({ children }) {
     } catch (err) {
       console.warn('[AuthProvider] Hydration error, using session metadata:', err.message)
       const isOnboarded =
-        authUser.user_metadata?.onboarding_completed !== undefined
-          ? authUser.user_metadata.onboarding_completed
-          : localStorage.getItem(`qualifyai_onboarding_${authUser.id}`) === 'true'
+        Boolean(authUser.user_metadata?.onboarding_completed) ||
+        localStorage.getItem(`qualifyai_onboarding_${authUser.id}`) === 'true'
 
       const fallbackUser = {
         id: authUser.id,
@@ -300,7 +298,7 @@ export function AuthProvider({ children }) {
       // 2. Persist to backend /api/auth/onboarding
       const token = user.token || session?.access_token || localStorage.getItem('qualifyai_token')
       if (token) {
-        await fetch('/api/auth/onboarding', {
+        await fetch(`${API_BASE_URL}/auth/onboarding`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
