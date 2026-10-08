@@ -66,7 +66,14 @@ app.get('/api', (_req, res) => res.status(200).json({
   version: '1.2.0',
 }))
 
-app.get('/api/health', (_req, res) => res.status(200).json({
+app.use((req, _res, next) => {
+  if (req.url && req.url.includes('//')) {
+    req.url = req.url.replace(/\/+/g, '/')
+  }
+  next()
+})
+
+app.get(['/api/health', '/health'], (_req, res) => res.status(200).json({
   status: 'healthy',
   timestamp: new Date().toISOString(),
   version: '1.2.0',
@@ -75,15 +82,15 @@ app.get('/api/health', (_req, res) => res.status(200).json({
   geminiConfigured: Boolean(config.gemini.apiKey),
 }))
 
-app.use('/api/auth', authRoutes)
-app.use('/api/ai', aiRoutes)
-app.use('/api/jobs', jobRoutes)
-app.use('/api/invitations', invitationRoutes)
-app.use('/api/interviews', interviewRoutes)
-app.use('/api/datasets', datasetRoutes)
-app.use('/api/model-benchmarks', modelEvaluationRoutes)
-app.use('/api/gemini', geminiRoutes)
-app.use('/api/voice', voiceRoutes)
+app.use(['/api/auth', '/auth'], authRoutes)
+app.use(['/api/ai', '/ai'], aiRoutes)
+app.use(['/api/jobs', '/jobs'], jobRoutes)
+app.use(['/api/invitations', '/invitations'], invitationRoutes)
+app.use(['/api/interviews', '/interviews'], interviewRoutes)
+app.use(['/api/datasets', '/datasets'], datasetRoutes)
+app.use(['/api/model-benchmarks', '/model-benchmarks'], modelEvaluationRoutes)
+app.use(['/api/gemini', '/gemini'], geminiRoutes)
+app.use(['/api/voice', '/voice'], voiceRoutes)
 app.use((req, res) => res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: `Route not found: ${req.method} ${req.originalUrl}` } }))
 app.use(errorHandler)
 

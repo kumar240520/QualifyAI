@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { interviewService } from '../services/interviewService.js'
 import { VoiceInterviewEngine } from '../services/voiceInterviewEngine.js'
+import { API_BASE_URL } from '../services/apiConfig.js'
 import { proctoringService } from '../services/proctoringService.js'
 import { VisualProctoringService } from '../services/visualProctoringService.js'
 import { normalizeApiError } from '../utils/errorNormalizer.js'
@@ -1279,7 +1280,7 @@ export default function InterviewRoomPage() {
       if (token && !isCompleted) {
         const targetId = session?.interview_id || session?.id || 'auto'
         const payload = JSON.stringify({ token, autoTerminated: true, feedback: candidateFeedbackRef.current, feedbackRating: candidateAiRatingRef.current })
-        const url = `${import.meta.env.VITE_API_URL || '/api'}/interviews/${targetId}/complete`
+        const url = `${API_BASE_URL}/interviews/${targetId}/complete`
         navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }))
       }
     }

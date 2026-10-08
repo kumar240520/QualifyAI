@@ -1,6 +1,5 @@
 import { supabase } from '../lib/supabase.js'
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
+import { API_BASE_URL } from './apiConfig.js'
 
 export async function getAuthHeaders() {
   let token = localStorage.getItem('qualifyai_token')
@@ -28,9 +27,11 @@ export async function getAuthHeaders() {
 
 export async function apiFetch(path, options = {}) {
   const authHeaders = await getAuthHeaders()
+  const cleanPath = path.startsWith('/') ? path : `/${path}`
+  const targetPath = cleanPath.startsWith('/api') ? cleanPath.slice(4) : cleanPath
   const url = path.startsWith('http')
     ? path
-    : `${API_BASE_URL}${path.startsWith('/api') ? path.replace('/api', '') : path}`
+    : `${API_BASE_URL}${targetPath}`
 
   const headers = {
     ...authHeaders,

@@ -6,6 +6,7 @@
  */
 // Global singleton holder for cross-page engine transfer (InvitationAcceptancePage → InterviewRoomPage)
 import { AIInterviewAudioPlayer } from './AIInterviewAudioPlayer.js'
+import { API_BASE_URL } from './apiConfig.js'
 
 let _preconnectedEngine = null
 
@@ -146,7 +147,7 @@ export class VoiceInterviewEngine {
     this._updateState('CONNECTING')
     try {
       const health = await Promise.race([
-        fetch(`${import.meta.env.VITE_API_URL || '/api'}/health`),
+        fetch(`${API_BASE_URL}/health`),
         new Promise((_, reject) => setTimeout(() => reject(new Error(`Voice service check timed out after ${timeoutMs}ms.`)), timeoutMs)),
       ])
       if (!health.ok) throw new Error('Voice service is unavailable.')
@@ -216,7 +217,7 @@ export class VoiceInterviewEngine {
     }
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/voice/synthesize`, {
+      const response = await fetch(`${API_BASE_URL}/voice/synthesize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
         body: JSON.stringify({ token: this.token, text }),

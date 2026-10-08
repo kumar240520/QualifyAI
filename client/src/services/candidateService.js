@@ -1,6 +1,5 @@
 import { supabase } from '../lib/supabase.js'
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
+import { API_BASE_URL } from './apiConfig.js'
 
 async function getAuthHeaders() {
   let token = localStorage.getItem('qualifyai_token')

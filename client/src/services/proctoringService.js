@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
+import { API_BASE_URL } from './apiConfig.js'
 
 export const proctoringService = {
   /**
