@@ -1109,7 +1109,7 @@ export const interviewEngineService = {
   /**
    * Explicit interview completion
    */
-  async completeInterview({ interviewId, token, feedback, feedbackRating }) {
+  async completeInterview({ interviewId, token, feedback, feedbackRating, terminationMetadata }) {
     const supabase = getServiceSupabaseClient()
     const { job, candidate } = await this._resolveTokenContext(token, true)
 
@@ -1150,12 +1150,17 @@ export const interviewEngineService = {
 
     let completedInterview = null
     if (targetInterviewId) {
+      const interviewUpdate = {
+        status: 'COMPLETED',
+        completed_at: new Date().toISOString(),
+      }
+      if (terminationMetadata?.warning_count) {
+        interviewUpdate.warning_count = Number(terminationMetadata.warning_count)
+      }
+
       const { data: interview, error } = await supabase
         .from('interviews')
-        .update({
-          status: 'COMPLETED',
-          completed_at: new Date().toISOString(),
-        })
+        .update(interviewUpdate)
         .eq('id', targetInterviewId)
         .select()
         .maybeSingle()
@@ -1175,21 +1180,33 @@ export const interviewEngineService = {
           : Number(feedbackRating)
         const hasFeedback = typeof feedback === 'string' && feedback.trim().length > 0
         const hasValidRating = Number.isInteger(normalizedRating) && normalizedRating >= 1 && normalizedRating <= 5
-        if (hasFeedback || hasValidRating) {
-          await supabase.from('interview_sessions').update({
-            session_metadata: {
-              ...metadata,
-              ...(hasFeedback ? { candidate_feedback: feedback.trim().slice(0, 4000) } : {}),
-              ...(hasValidRating ? { candidate_ai_rating: normalizedRating } : {}),
-              feedback_submitted_at: new Date().toISOString(),
-            },
-          }).eq('id', targetSession.id)
+        const updatedMeta = {
+          ...metadata,
+          ...(hasFeedback ? { candidate_feedback: feedback.trim().slice(0, 4000) } : {}),
+          ...(hasValidRating ? { candidate_ai_rating: normalizedRating } : {}),
+          ...(hasFeedback || hasValidRating ? { feedback_submitted_at: new Date().toISOString() } : {}),
+          ...(terminationMetadata ? {
+            terminated_for_violations: Boolean(terminationMetadata.terminated_for_violations ?? terminationMetadata.is_terminated),
+            termination_reason: terminationMetadata.reason || 'Assessment automatically terminated: Exceeded 3-warning security limit.',
+            warning_count: Number(terminationMetadata.warning_count) || 3,
+            termination_history: terminationMetadata.history || [],
+          } : {}),
         }
+        await supabase.from('interview_sessions').update({
+          session_metadata: updatedMeta,
+        }).eq('id', targetSession.id)
       }
       await supabase
         .from('interview_sessions')
         .update({ connection_state: 'DISCONNECTED', conversation_state: 'IDLE' })
         .eq('interview_id', targetInterviewId)
+
+      try {
+        const { proctoringEngineService } = await import('../proctoring/proctoringEngineService.js')
+        await proctoringEngineService.calculateIntegritySummary(targetInterviewId)
+      } catch (sumErr) {
+        console.warn(`[completeInterview] Summary calculation notice: ${sumErr.message}`)
+      }
     }
 
     if (token) {

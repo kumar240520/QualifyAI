@@ -1,4 +1,29 @@
+import { supabase } from '../lib/supabase.js'
 import { API_BASE_URL } from './apiConfig.js'
+
+async function getAuthHeaders() {
+  let token = localStorage.getItem('qualifyai_token')
+  if (!token) {
+    try {
+      const stored = localStorage.getItem('qualifyai_auth_session')
+      if (stored) {
+        token = JSON.parse(stored)?.token
+      }
+    } catch (e) {}
+  }
+
+  if (!token) {
+    try {
+      const { data } = await supabase.auth.getSession()
+      token = data?.session?.access_token
+    } catch (e) {}
+  }
+
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
 
 export const proctoringService = {
   /**
@@ -25,8 +50,10 @@ export const proctoringService = {
    * Fetch proctoring summary and integrity risk assessment
    */
   async getSummary(interviewId) {
+    const headers = await getAuthHeaders()
     const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/proctoring/summary`, {
       method: 'GET',
+      headers,
     })
     const data = await res.json()
     if (!res.ok || !data.success) {

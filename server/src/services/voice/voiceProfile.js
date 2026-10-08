@@ -12,6 +12,8 @@ export const VOICE_PROFILES = {
     voiceId: 'qualifyai_interviewer_01',
     role: 'professional_interviewer',
     interviewerName: 'Arjun',
+    provider: 'cosyvoice',
+    version: 'v1',
     language: 'en-IN',
     gender: 'male',
     ageProfile: '30-35',
@@ -29,6 +31,7 @@ export const VOICE_PROFILES = {
     kokoroVoice: 'am_michael',
     cosyvoiceSpeaker: 'qualifyai_interviewer_01',
     cosyvoiceInstruct: INTERVIEWER_PERSONA_PROMPT,
+    cosyvoiceModel: 'cosyvoice-v3',
     geminiModel: 'models/gemini-2.5-flash-native-audio-latest',
     fallbackModels: [
       'models/gemini-2.5-flash-native-audio-preview-12-2025',

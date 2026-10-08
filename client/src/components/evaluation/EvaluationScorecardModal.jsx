@@ -22,6 +22,11 @@ import {
   ShieldAlert,
   Eye,
   Loader2,
+  Camera,
+  AlertOctagon,
+  Users,
+  Maximize2,
+  VideoOff,
 } from 'lucide-react'
 import { evaluationService } from '../../services/evaluationService.js'
 import { proctoringService } from '../../services/proctoringService.js'
@@ -82,14 +87,18 @@ export default function EvaluationScorecardModal({
         proctoringService.getSummary(interviewId),
       ])
 
+      let evaluationData = null
       if (evalRes.status === 'fulfilled') {
+        evaluationData = evalRes.value
         setData(evalRes.value)
       } else {
         throw evalRes.reason
       }
 
-      if (procRes.status === 'fulfilled') {
+      if (procRes.status === 'fulfilled' && procRes.value) {
         setProctoringData(procRes.value)
+      } else if (evaluationData?.proctoringSummary) {
+        setProctoringData(evaluationData.proctoringSummary)
       }
     } catch (err) {
       console.warn('[EvaluationScorecardModal] Failed to load evaluation:', err.message)
@@ -127,6 +136,9 @@ export default function EvaluationScorecardModal({
 
       setEvalProgress(100)
       setData(res)
+      if (res?.proctoringSummary) {
+        setProctoringData(res.proctoringSummary)
+      }
       if (onEvaluationComplete) {
         onEvaluationComplete(res)
       }
@@ -152,6 +164,53 @@ export default function EvaluationScorecardModal({
   const rubricScores = data?.rubricScores || []
   const commMetrics = data?.communicationMetrics || {}
 
+  const flags = proctoringData?.flags_summary || {}
+  const rawEvents = flags.incident_timeline || []
+  const warningCount = flags.security_warnings_count ?? (data?.evaluation?.interview?.warning_count ?? 0)
+  const maxWarnings = flags.max_warnings || 3
+
+  const isTerminatedForViolations = Boolean(
+    flags.is_terminated ||
+    warningCount >= maxWarnings ||
+    data?.evaluation?.interview?.warning_count >= maxWarnings ||
+    data?.evaluation?.interview?.status === 'TERMINATED'
+  )
+
+  const terminationReason =
+    flags.termination_reason ||
+    (isTerminatedForViolations
+      ? `Assessment automatically terminated: Exceeded ${maxWarnings}-warning security threshold due to sustained integrity violations.`
+      : null)
+
+  const cameraScore = typeof flags.camera_score === 'number'
+    ? flags.camera_score
+    : (flags.face_absent_count > 0 ? Math.max(0, 100 - flags.face_absent_count * 20) : 100)
+
+  const riskIndex = typeof proctoringData?.risk_score === 'number'
+    ? proctoringData.risk_score
+    : (isTerminatedForViolations ? 88 : 0)
+
+  // Trust badge determination
+  let trustBadge = {
+    label: 'High Trust Verified',
+    bg: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    icon: ShieldCheck,
+  }
+  if (isTerminatedForViolations || proctoringData?.trust_level === 'SUSPICIOUS' || riskIndex >= 50) {
+    trustBadge = {
+      label: isTerminatedForViolations ? 'Terminated · High Risk' : 'Elevated Risk Flagged',
+      bg: 'bg-rose-50 text-rose-700 border-rose-300',
+      icon: ShieldAlert,
+    }
+  } else if (proctoringData?.trust_level === 'MODERATE' || riskIndex >= 20) {
+    trustBadge = {
+      label: 'Moderate Risk Review',
+      bg: 'bg-amber-50 text-amber-700 border-amber-300',
+      icon: AlertTriangle,
+    }
+  }
+  const TrustIcon = trustBadge.icon
+
   const overallScore = Math.round(evaluation?.overall_score || 0)
   const technicalScore = Math.round(evaluation?.technical_score || 0)
   const problemScore = Math.round(evaluation?.problem_solving_score || 0)
@@ -159,6 +218,13 @@ export default function EvaluationScorecardModal({
 
   // Recommendation Badge Helper
   const getRecommendationBadge = (score) => {
+    if (isTerminatedForViolations) {
+      return {
+        label: 'FLAGGED / REJECTED',
+        bg: 'bg-rose-50 text-rose-700 border-rose-300',
+        icon: XCircle,
+      }
+    }
     if (score >= 85) {
       return {
         label: 'STRONG HIRE',
@@ -379,6 +445,36 @@ export default function EvaluationScorecardModal({
             </div>
           ) : (
             <>
+              {/* Auto-Termination Security Limit Banner */}
+              {isTerminatedForViolations && (
+                <div className="p-5 rounded-2xl bg-rose-50 border-2 border-rose-200/90 text-rose-950 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-rose-600/30">
+                        <AlertOctagon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-bold text-rose-950 uppercase tracking-wide">
+                            Assessment Automatically Terminated
+                          </h4>
+                          <span className="text-[10px] px-2.5 py-0.5 rounded-full font-mono font-bold bg-rose-200 text-rose-900 border border-rose-300">
+                            SECURITY LIMIT REACHED &bull; {warningCount} / {maxWarnings} WARNINGS
+                          </span>
+                        </div>
+                        <p className="text-xs text-rose-800 font-medium mt-1 leading-relaxed">
+                          {terminationReason}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="px-3.5 py-2 rounded-xl bg-white border border-rose-200 text-right shadow-2xs">
+                      <span className="text-[10px] font-mono uppercase text-rose-600 block font-bold">Proctoring Verdict</span>
+                      <span className="text-xs font-black text-rose-900">INTEGRITY BREACH FLAG</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Scorecard Hero Banner */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-6 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white shadow-xl">
                 {/* Composite Overall Score */}
@@ -476,77 +572,263 @@ export default function EvaluationScorecardModal({
               )}
 
               {/* Phase 9: Assessment Integrity & Proctoring Telemetry */}
-              <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    {proctoringData?.trust_level === 'HIGH' || !proctoringData ? (
-                      <ShieldCheck className="w-5 h-5 text-emerald-600" />
-                    ) : proctoringData?.trust_level === 'MODERATE' ? (
-                      <AlertTriangle className="w-5 h-5 text-amber-600" />
-                    ) : (
-                      <ShieldAlert className="w-5 h-5 text-rose-600" />
-                    )}
+              <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-5">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                        isTerminatedForViolations || proctoringData?.trust_level === 'SUSPICIOUS'
+                          ? 'bg-rose-100 text-rose-700'
+                          : proctoringData?.trust_level === 'MODERATE'
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-emerald-100 text-emerald-700'
+                      }`}
+                    >
+                      <TrustIcon className="w-5 h-5" />
+                    </div>
                     <div>
-                      <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                        Assessment Integrity & Telemetry
-                      </h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                          Assessment Integrity & Telemetry
+                        </h4>
+                        {isTerminatedForViolations && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                            Auto-Terminated
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[11px] text-slate-500">
                         Privacy-preserving browser focus & acoustic monitoring
                       </p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${trustBadge.bg}`}>
+                      {trustBadge.label}
+                    </span>
+                    <span className="text-xs font-mono font-bold text-slate-700 bg-white px-2.5 py-1 rounded-full border border-slate-200 shadow-2xs">
+                      Risk Index: {riskIndex}/100
+                    </span>
                     <span
-                      className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
-                        proctoringData?.trust_level === 'HIGH' || !proctoringData
+                      className={`text-xs font-mono font-bold px-2.5 py-1 rounded-full border ${
+                        cameraScore >= 80
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : proctoringData?.trust_level === 'MODERATE'
+                          : cameraScore >= 60
                           ? 'bg-amber-50 text-amber-700 border-amber-200'
                           : 'bg-rose-50 text-rose-700 border-rose-200'
                       }`}
                     >
-                      {proctoringData?.trust_level === 'HIGH' || !proctoringData
-                        ? 'High Trust Verified'
-                        : proctoringData?.trust_level === 'MODERATE'
-                        ? 'Moderate Risk Review'
-                        : 'Elevated Risk Flagged'}
-                    </span>
-                    <span className="text-xs font-mono font-bold text-slate-700 bg-white px-2.5 py-1 rounded-full border border-slate-200">
-                      Risk Index: {proctoringData?.risk_score ?? 0}/100
+                      Camera Integrity: {cameraScore}%
                     </span>
                   </div>
                 </div>
 
-                {/* Telemetry Metrics Grid */}
+                {/* Telemetry Metrics Grid (8 Dimensions) */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 text-center">
-                    <span className="text-[10px] font-mono uppercase text-slate-400">Focus Losses</span>
-                    <p className="text-base font-bold text-slate-900 mt-0.5">
-                      {proctoringData?.flags_summary?.focus_loss_count ?? 0}
+                  <div
+                    className={`p-3 rounded-xl border text-center transition ${
+                      (flags.face_absent_count || 0) > 0
+                        ? 'bg-rose-50/70 border-rose-300 shadow-xs'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
+                    <span className="text-[10px] font-mono uppercase text-slate-400">Face Absences</span>
+                    <p
+                      className={`text-base font-bold mt-0.5 ${
+                        (flags.face_absent_count || 0) > 0 ? 'text-rose-700 font-black' : 'text-slate-900'
+                      }`}
+                    >
+                      {flags.face_absent_count ?? 0}
                     </p>
                   </div>
 
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 text-center">
+                  <div
+                    className={`p-3 rounded-xl border text-center transition ${
+                      (flags.multiple_faces_count || 0) > 0
+                        ? 'bg-rose-50/70 border-rose-300 shadow-xs'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
+                    <span className="text-[10px] font-mono uppercase text-slate-400">Multiple Faces</span>
+                    <p
+                      className={`text-base font-bold mt-0.5 ${
+                        (flags.multiple_faces_count || 0) > 0 ? 'text-rose-700 font-black' : 'text-slate-900'
+                      }`}
+                    >
+                      {flags.multiple_faces_count ?? 0}
+                    </p>
+                  </div>
+
+                  <div
+                    className={`p-3 rounded-xl border text-center transition ${
+                      (flags.tab_switch_count || 0) > 0
+                        ? 'bg-amber-50/70 border-amber-300 shadow-xs'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
                     <span className="text-[10px] font-mono uppercase text-slate-400">Tab Switches</span>
-                    <p className="text-base font-bold text-slate-900 mt-0.5">
-                      {proctoringData?.flags_summary?.tab_switch_count ?? 0}
+                    <p
+                      className={`text-base font-bold mt-0.5 ${
+                        (flags.tab_switch_count || 0) > 0 ? 'text-amber-700 font-black' : 'text-slate-900'
+                      }`}
+                    >
+                      {flags.tab_switch_count ?? 0}
                     </p>
                   </div>
 
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 text-center">
+                  <div
+                    className={`p-3 rounded-xl border text-center transition ${
+                      (flags.focus_loss_count || 0) > 0
+                        ? 'bg-amber-50/70 border-amber-300 shadow-xs'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
+                    <span className="text-[10px] font-mono uppercase text-slate-400">Focus Losses</span>
+                    <p
+                      className={`text-base font-bold mt-0.5 ${
+                        (flags.focus_loss_count || 0) > 0 ? 'text-amber-700 font-black' : 'text-slate-900'
+                      }`}
+                    >
+                      {flags.focus_loss_count ?? 0}
+                    </p>
+                  </div>
+
+                  <div
+                    className={`p-3 rounded-xl border text-center transition ${
+                      (flags.fullscreen_exit_count || 0) > 0
+                        ? 'bg-rose-50/70 border-rose-300 shadow-xs'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
+                    <span className="text-[10px] font-mono uppercase text-slate-400">Fullscreen Exits</span>
+                    <p
+                      className={`text-base font-bold mt-0.5 ${
+                        (flags.fullscreen_exit_count || 0) > 0 ? 'text-rose-700 font-black' : 'text-slate-900'
+                      }`}
+                    >
+                      {flags.fullscreen_exit_count ?? 0}
+                    </p>
+                  </div>
+
+                  <div
+                    className={`p-3 rounded-xl border text-center transition ${
+                      (flags.visibility_change_count || 0) > 0
+                        ? 'bg-amber-50/70 border-amber-300 shadow-xs'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
                     <span className="text-[10px] font-mono uppercase text-slate-400">Visibility Shifts</span>
-                    <p className="text-base font-bold text-slate-900 mt-0.5">
-                      {proctoringData?.flags_summary?.visibility_change_count ?? 0}
+                    <p
+                      className={`text-base font-bold mt-0.5 ${
+                        (flags.visibility_change_count || 0) > 0 ? 'text-amber-700 font-black' : 'text-slate-900'
+                      }`}
+                    >
+                      {flags.visibility_change_count ?? 0}
                     </p>
                   </div>
 
-                  <div className="p-3 bg-white rounded-xl border border-slate-200 text-center">
+                  <div
+                    className={`p-3 rounded-xl border text-center transition ${
+                      (flags.acoustic_anomaly_count || 0) > 0
+                        ? 'bg-amber-50/70 border-amber-300 shadow-xs'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
                     <span className="text-[10px] font-mono uppercase text-slate-400">Audio Spikes</span>
-                    <p className="text-base font-bold text-slate-900 mt-0.5">
-                      {proctoringData?.flags_summary?.acoustic_anomaly_count ?? 0}
+                    <p
+                      className={`text-base font-bold mt-0.5 ${
+                        (flags.acoustic_anomaly_count || 0) > 0 ? 'text-amber-700 font-black' : 'text-slate-900'
+                      }`}
+                    >
+                      {flags.acoustic_anomaly_count ?? 0}
                     </p>
                   </div>
+
+                  <div
+                    className={`p-3 rounded-xl border text-center transition ${
+                      (flags.camera_lost_count || 0) > 0
+                        ? 'bg-rose-50/70 border-rose-300 shadow-xs'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
+                    <span className="text-[10px] font-mono uppercase text-slate-400">Camera Drops</span>
+                    <p
+                      className={`text-base font-bold mt-0.5 ${
+                        (flags.camera_lost_count || 0) > 0 ? 'text-rose-700 font-black' : 'text-slate-900'
+                      }`}
+                    >
+                      {flags.camera_lost_count ?? 0}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Integrity Violation Audit Trail */}
+                <div className="pt-2 border-t border-slate-200/90 space-y-2.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-mono font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Integrity Violation Audit Trail</span>
+                    </span>
+                    <span
+                      className={`text-[11px] font-mono font-bold ${
+                        rawEvents.length > 0 ? 'text-rose-600' : 'text-emerald-600'
+                      }`}
+                    >
+                      {rawEvents.length > 0 ? `${rawEvents.length} RECORDED` : '0 RECORDED · CLEAN'}
+                    </span>
+                  </div>
+
+                  {rawEvents.length === 0 ? (
+                    <div className="p-3.5 bg-white rounded-xl border border-slate-200 text-xs text-slate-500 text-center">
+                      No integrity violations or security warnings recorded during this assessment session.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {rawEvents.map((evt, idx) => {
+                        const warningNum = evt.warningNumber || idx + 1
+                        const reasonText =
+                          evt.reason || evt.metadata?.reason || evt.title || 'Security warning recorded.'
+                        const timeStr =
+                          evt.formatted_time ||
+                          (evt.timestamp_ms
+                            ? new Date(evt.timestamp_ms).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                              })
+                            : '')
+
+                        return (
+                          <div
+                            key={evt.id || idx}
+                            className="p-3 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3 shadow-2xs hover:border-slate-300 transition"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="px-2 py-0.5 rounded-md bg-rose-50 border border-rose-200 text-rose-700 font-mono text-[11px] font-bold shrink-0">
+                                #{warningNum}
+                              </span>
+                              <div className="min-w-0">
+                                <p className="text-xs text-slate-800 font-medium truncate">
+                                  {reasonText}
+                                </p>
+                                {evt.title && evt.title !== reasonText && (
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    {evt.title} &bull; Severity: {evt.severity || 'MEDIUM'}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {timeStr && (
+                              <span className="text-[11px] font-mono text-slate-400 shrink-0">
+                                {timeStr}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 

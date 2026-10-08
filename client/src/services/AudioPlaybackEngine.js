@@ -156,7 +156,20 @@ export class AudioPlaybackEngine {
     }
 
     if (this.audioContext.state !== 'running') {
-      throw new Error(`AudioContext is ${this.audioContext.state}. User gesture required.`)
+      console.warn(`[AudioPlaybackEngine] AudioContext is ${this.audioContext.state}. Attaching one-time gesture resume listener.`)
+      if (typeof window !== 'undefined') {
+        const resumeOnInteraction = () => {
+          this.audioContext?.resume().then(() => {
+            console.log('[AudioPlaybackEngine] AudioContext successfully resumed via user interaction.')
+          }).catch(() => {})
+          window.removeEventListener('click', resumeOnInteraction, true)
+          window.removeEventListener('keydown', resumeOnInteraction, true)
+          window.removeEventListener('touchstart', resumeOnInteraction, true)
+        }
+        window.addEventListener('click', resumeOnInteraction, { capture: true, once: true })
+        window.addEventListener('keydown', resumeOnInteraction, { capture: true, once: true })
+        window.addEventListener('touchstart', resumeOnInteraction, { capture: true, once: true })
+      }
     }
     return this.audioContext
   }

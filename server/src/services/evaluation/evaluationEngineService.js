@@ -371,6 +371,14 @@ INSTRUCTIONS:
       .eq('interview_id', interviewId)
       .maybeSingle()
 
+    let proctoringSummary = null
+    try {
+      const { proctoringEngineService } = await import('../proctoring/proctoringEngineService.js')
+      proctoringSummary = await proctoringEngineService.getProctoringSummary(interviewId, organizationId)
+    } catch (e) {
+      console.warn('[getEvaluationByInterviewId] Proctoring summary notice:', e.message)
+    }
+
     return {
       evaluation: {
         id: evaluation.id,
@@ -400,6 +408,7 @@ INSTRUCTIONS:
         clarity_score: 82.0,
         pauses_count: 2,
       },
+      proctoringSummary,
     }
   },
 }

@@ -187,7 +187,7 @@ export class VoiceInterviewEngine {
     let resolvePlayback
     const playbackFinished = new Promise((resolve) => { resolvePlayback = resolve })
     this.playbackWaiters.set(audioTurnId, resolvePlayback)
-    this._handleServerMessage({ data: JSON.stringify({ type: 'ai_audio_started', audioTurnId }) })
+    this._handleServerMessage({ data: JSON.stringify({ type: 'ai_audio_started', audioTurnId, spokenPrompt: text }) })
     let buffer = ''
     let receivedChunks = 0
     let playbackTimeout = null
@@ -256,16 +256,21 @@ export class VoiceInterviewEngine {
       console.warn('[VoiceEngine] Server voice synthesis unavailable, falling back to client speech synthesis:', error.message)
       if (typeof window !== 'undefined' && 'speechSynthesis' in window && !this.isStopped) {
         try {
+          if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume()
+          }
           window.speechSynthesis.cancel()
           const utterance = new SpeechSynthesisUtterance(text)
           utterance.lang = this.language || 'en-US'
+          const voice = this._getPreferredSpeechVoice()
+          if (voice) utterance.voice = voice
           utterance.rate = 1.0
           this._updateState('SPEAKING')
           await new Promise((resolve) => {
             utterance.onend = resolve
             utterance.onerror = resolve
             window.speechSynthesis.speak(utterance)
-            setTimeout(resolve, 8000)
+            setTimeout(resolve, 6000)
           })
           this._concludeAiSpeakingTurn()
           return
@@ -423,6 +428,13 @@ export class VoiceInterviewEngine {
     if (!spokenText || this.isStopped) return
     console.log('[VoiceEngine] Speaking AI Question:', spokenText.slice(0, 60))
 
+    this.isAiTurnActive = true
+    this.isPlaying = true
+    this.audioState = 'AI_SPEAKING'
+    this.isAutoMutedWhileSpeaking = true
+    this._muteMicrophoneHardware(true)
+    this._updateState('SPEAKING')
+
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this._initializeVoiceTransport()
     }
@@ -529,30 +541,45 @@ export class VoiceInterviewEngine {
   }
 
   /**
-   * Spoken filler nudges when candidate remains silent
-   * Requirements:
-   * Level 1 (after 10s silence): "I am here, you can just answer it. You can answer it in your own way."
-   * Level 2 (after 5s silence): "Whenever you're ready, feel free to answer, or we can move forward."
+   * Spoken filler nudges when candidate remains silent.
+   * Unified Voice Architecture: Uses the EXACT SAME audio pipeline, EXACT SAME CosyVoice provider,
+   * and EXACT SAME voice profile (qualifyai_interviewer_01) as the main interview questions.
    */
   triggerSilenceNudge(level = 1) {
     if (this.isStopped) return ''
     const nudge1Phrases = [
+      "Whenever you're ready, you can answer. I'm still here.",
       "I am here, you can just answer it. You can answer it in your own way.",
-      "Take your time, I am here. You can just answer it in your own way.",
-      "I'm here, feel free to answer however you are most comfortable."
+      "Take your time, I am here. You can just answer it in your own way."
     ]
     const nudge2Phrases = [
+      "Take your time. You can answer whenever you're ready.",
       "Whenever you're ready, feel free to answer, or we can move forward.",
-      "I am still here. Feel free to answer in your own words, or we can move to the next question.",
-      "Just checking in—take your time, or we can move forward whenever you're ready."
+      "I am still here. Feel free to answer in your own words, or we can move to the next question."
     ]
     const chosen = level === 1
       ? nudge1Phrases[Math.floor(Math.random() * nudge1Phrases.length)]
       : nudge2Phrases[Math.floor(Math.random() * nudge2Phrases.length)]
 
-    console.log(`[VoiceEngine] Speaking audible silence nudge #${level} ALOUD:`, chosen)
-    this.speakDirectSpeech(chosen)
+    console.log(`[VoiceEngine] Speaking unified CosyVoice silence nudge #${level}:`, chosen)
+    this.speakAiQuestion(chosen)
+
     return chosen
+  }
+
+  /**
+   * Explicitly set candidate microphone mute state
+   */
+  setMicrophoneMuted(muted) {
+    if (!muted) {
+      this.isManualMuted = false
+      this.isMuted = false
+      this.audioState = 'LISTENING'
+      this._muteMicrophoneHardware(false)
+      this._updateState('LISTENING')
+      return false
+    }
+    return this.setMute(muted)
   }
 
   /**
@@ -1072,6 +1099,12 @@ export class VoiceInterviewEngine {
 
     if (message.audioUnavailable || this.audioPlaybackFailed || !this.hasReceivedNativeAudioInCurrentTurn) {
       this._stopAiAudioPlayback()
+      const textToSpeak = message.fullTranscript || this.latestAiTranscript || ''
+      if (textToSpeak && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        console.log('[VoiceEngine] No server audio chunks received for turn; speaking aloud via direct speech fallback:', textToSpeak)
+        this.speakDirectSpeech(textToSpeak)
+        return
+      }
       this._concludeAiSpeakingTurn()
       return
     }
@@ -1148,6 +1181,13 @@ export class VoiceInterviewEngine {
     this.audioState = 'LISTENING'
     this._muteMicrophoneHardware(false)
     this._updateState('LISTENING')
+
+    if (this.recognition && !this.isRecognizing) {
+      try {
+        this.recognition.start()
+        this.isRecognizing = true
+      } catch (_) {}
+    }
   }
 
   /**

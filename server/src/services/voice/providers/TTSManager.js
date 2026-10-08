@@ -46,6 +46,13 @@ export class TTSManager {
     await cosyvoice.initialize()
     this.registerProvider(cosyvoice)
 
+    // Pre-warm phrase cache with canonical filler & closing phrases in background for 0ms retrieval
+    ttsPhraseCache
+      .prewarm({ provider: cosyvoice, voiceProfile: DEFAULT_VOICE_PROFILE })
+      .catch((err) => {
+        console.warn('[TTSManager] Prewarming phrase cache notice:', err.message)
+      })
+
     // 2. Gemini Live TTS Provider
     const gemini = new GeminiLiveTTSProvider()
     await gemini.initialize()

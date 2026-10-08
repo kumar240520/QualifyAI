@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Sparkles,
@@ -36,17 +36,71 @@ import ActiveQuestionPanel from '../components/interview/ActiveQuestionPanel.jsx
 import QuestionRenderer from '../components/interview/QuestionRenderer.jsx'
 import ConversationStream from '../components/interview/ConversationStream.jsx'
 
+const NON_VOICE_INTERACTIVE_TYPES = [
+  'MULTIPLE_CHOICE',
+  'SINGLE_CHOICE',
+  'MULTI_SELECT',
+  'FILL_IN_THE_BLANK',
+  'CODE_OUTPUT',
+  'CODE_WRITING',
+  'SQL',
+  'TRUE_FALSE',
+  'YES_NO',
+]
+
 /**
- * Determines whether a question requires open-ended conversational voice/essay input.
- * ONLY descriptive, short-answer, and behavioral questions keep the microphone unmuted by default.
- * Multiple choice, coding, SQL, output, and boolean questions default the microphone to MUTED.
+ * Authoritative default microphone policy:
+ * - SHORT_ANSWER, DESCRIPTIVE, BEHAVIORAL, SCENARIO → microphone strictly ON by default (true)
+ * - Structured non-voice widget questions (MCQ, Coding, SQL, etc.) → microphone OFF by default (false)
  */
-function isLongFormVoiceQuestion(questionOrType) {
-  if (!questionOrType) return false
+function getDefaultMicEnabled(questionOrType) {
+  if (!questionOrType) return true
   const t = typeof questionOrType === 'string'
     ? questionOrType.toUpperCase()
-    : String(questionOrType.type || '').toUpperCase()
-  return ['DESCRIPTIVE', 'SHORT_ANSWER', 'BEHAVIORAL'].includes(t)
+    : String(questionOrType.type || questionOrType.question_type || '').toUpperCase()
+
+  if (!t) return true
+  return !NON_VOICE_INTERACTIVE_TYPES.includes(t)
+}
+
+function isLongFormVoiceQuestion(questionOrType) {
+  return getDefaultMicEnabled(questionOrType)
+}
+
+/**
+ * Question stage durations (in seconds):
+ * - Multiple choice / boolean: 15s (15s -> Filler 1 -> 15s -> Filler 2 -> 15s -> Skip)
+ * - Fill in blank / Code output: 20s (20s -> Filler 1 -> 20s -> Filler 2 -> 20s -> Skip)
+ * - Code writing / SQL: 45s (45s -> Filler 1 -> 45s -> Filler 2 -> 45s -> Skip)
+ * - Descriptive / Short answer: 15s stage duration to START responding.
+ *   (If user responds by speaking or typing, all time limits are removed!)
+ */
+function getQuestionStageDuration(questionOrType) {
+  if (!questionOrType) return 15
+  const t = typeof questionOrType === 'string'
+    ? questionOrType.toUpperCase()
+    : String(questionOrType.type || questionOrType.question_type || '').toUpperCase()
+
+  switch (t) {
+    case 'CODE_WRITING':
+    case 'SQL':
+      return 45
+    case 'CODE_OUTPUT':
+    case 'FILL_IN_THE_BLANK':
+      return 20
+    case 'MULTIPLE_CHOICE':
+    case 'SINGLE_CHOICE':
+    case 'MULTI_SELECT':
+    case 'TRUE_FALSE':
+    case 'YES_NO':
+      return 15
+    case 'SHORT_ANSWER':
+    case 'DESCRIPTIVE':
+    case 'BEHAVIORAL':
+    case 'SCENARIO':
+    default:
+      return 15
+  }
 }
 
 /**
@@ -147,10 +201,14 @@ export default function InterviewRoomPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [isCompleted, setIsCompleted] = useState(false)
+  const isCompletedRef = useRef(false)
+  isCompletedRef.current = isCompleted
   const [lastAnalysis, setLastAnalysis] = useState(null)
 
   // Dynamic Answer Input State
   const [answerInputValue, setAnswerInputValue] = useState('')
+  const answerInputValueRef = useRef('')
+  answerInputValueRef.current = answerInputValue
   const [candidateInterimText, setCandidateInterimText] = useState('')
   const candidateSpeechBufferRef = useRef('')
 
@@ -161,6 +219,8 @@ export default function InterviewRoomPage() {
   const [nudgeCount, setNudgeCount] = useState(0) // 0: none, 1: nudge 1, 2: nudge 2
   const [unansweredQuestionsCount, setUnansweredQuestionsCount] = useState(0) // Server concludes after 3 consecutive unanswered questions
   const [isTerminatedForUnanswered, setIsTerminatedForUnanswered] = useState(false)
+  const isTerminatedForUnansweredRef = useRef(false)
+  isTerminatedForUnansweredRef.current = isTerminatedForUnanswered
   const [silenceSeconds, setSilenceSeconds] = useState(0)
   const silenceTimerRef = useRef(null)
   const nudgeCountRef = useRef(0)
@@ -177,6 +237,8 @@ export default function InterviewRoomPage() {
   const [integrityWarning, setIntegrityWarning] = useState(null)
   const [showFullscreenLockModal, setShowFullscreenLockModal] = useState(false)
   const [isTerminatedForViolations, setIsTerminatedForViolations] = useState(false)
+  const isTerminatedForViolationsRef = useRef(false)
+  isTerminatedForViolationsRef.current = isTerminatedForViolations
   const proctoringTrackerRef = useRef(null)
   const cameraPreviewRef = useRef(null)
   const visualProctoringRef = useRef(null)
@@ -186,6 +248,11 @@ export default function InterviewRoomPage() {
   const [voiceState, setVoiceState] = useState('CONNECTING')
   const [audioLevel, setAudioLevel] = useState(0)
   const [isMuted, setIsMuted] = useState(false)
+  const isMutedRef = useRef(false)
+  isMutedRef.current = isMuted
+  const [manualMicOverride, setManualMicOverride] = useState(false)
+  const manualMicOverrideRef = useRef(false)
+  manualMicOverrideRef.current = manualMicOverride
   const [speechLanguage, setSpeechLanguage] = useState('en-IN')
   const [liveAiSpeech, setLiveAiSpeech] = useState('')
   const [preventInterruption, setPreventInterruption] = useState(true)
@@ -208,12 +275,17 @@ export default function InterviewRoomPage() {
   const lastScheduledTextRef = useRef('')
   const isCandidateTurnLockedRef = useRef(true)
   const lastTypingActivityTimeRef = useRef(0)
+  const lastUserActivityTimeRef = useRef(Date.now())
+  const silenceSecondsRef = useRef(0)
   const autoMutedForNonDescriptiveRef = useRef(false)
   const liveAiSpeechStreamRef = useRef('')
   const targetSpokenScriptRef = useRef('')
   const audioProgressActiveRef = useRef(false)
   const scriptFallbackTickerRef = useRef(null)
+  const scriptFallbackTimeoutRef = useRef(null)
   const handoverScheduledRef = useRef(false)
+  const hasCandidateRespondedRef = useRef(false)
+  const [hasCandidateResponded, setHasCandidateResponded] = useState(false)
 
   const speakPendingAiPrompt = (engine = voiceEngineRef.current) => {
     const pending = pendingAiSpeechRef.current
@@ -233,6 +305,10 @@ export default function InterviewRoomPage() {
     setLiveAiSpeech('')
     audioProgressActiveRef.current = false
     handoverScheduledRef.current = false
+    if (scriptFallbackTimeoutRef.current) {
+      clearTimeout(scriptFallbackTimeoutRef.current)
+      scriptFallbackTimeoutRef.current = null
+    }
     if (scriptFallbackTickerRef.current) {
       clearInterval(scriptFallbackTickerRef.current)
       scriptFallbackTickerRef.current = null
@@ -250,7 +326,7 @@ export default function InterviewRoomPage() {
     // Fallback ticker: in case native audio stream is delayed or fails to connect,
     // start revealing words progressively after a 6-second grace period rather than racing ahead of native audio.
     let revealedIndex = 0
-    setTimeout(() => {
+    scriptFallbackTimeoutRef.current = setTimeout(() => {
       if (!audioProgressActiveRef.current && targetSpokenScriptRef.current === script && voiceStateRef.current === 'SPEAKING') {
         revealedIndex = 1
         setLiveAiSpeech(words.slice(0, 1).join(' '))
@@ -287,6 +363,10 @@ export default function InterviewRoomPage() {
     voiceStateRef.current = 'LISTENING'
     liveAiSpeechStreamRef.current = ''
     audioProgressActiveRef.current = false
+    if (scriptFallbackTimeoutRef.current) {
+      clearTimeout(scriptFallbackTimeoutRef.current)
+      scriptFallbackTimeoutRef.current = null
+    }
     if (scriptFallbackTickerRef.current) {
       clearInterval(scriptFallbackTickerRef.current)
       scriptFallbackTickerRef.current = null
@@ -295,18 +375,47 @@ export default function InterviewRoomPage() {
     setCandidateInterimText('')
     lastSpeechActivityTimeRef.current = 0
     lastScheduledTextRef.current = ''
+    lastUserActivityTimeRef.current = Date.now()
+    silenceSecondsRef.current = 0
+    setSilenceSeconds(0)
 
-    // Explicitly unmute candidate microphone and activate listening state
-    autoMutedForNonDescriptiveRef.current = false
-    setIsMuted(false)
-    if (voiceEngineRef.current) {
-      voiceEngineRef.current.unmuteAndStartListening()
+    // Determine microphone state based on candidate manual override vs question-type default policy (Requirements #1-3)
+    const isOverridden = manualMicOverrideRef.current
+    let micShouldBeMuted = false
+
+    if (isOverridden) {
+      // Respect candidate's explicit manual mic toggle within this question
+      micShouldBeMuted = Boolean(isMutedRef.current)
+    } else {
+      // Apply question-type default policy:
+      // SHORT_ANSWER, DESCRIPTIVE → ON by default (muted = false)
+      // MULTIPLE_CHOICE, TRUE_FALSE, FILL_IN_THE_BLANK, SCORED_OUTPUT → OFF by default (muted = true)
+      const currentQ = activeQuestionRef.current || currentQuestionData
+      const defaultMicOn = getDefaultMicEnabled(currentQ)
+      micShouldBeMuted = !defaultMicOn
     }
-    setVoiceState('LISTENING')
+
+    autoMutedForNonDescriptiveRef.current = micShouldBeMuted
+    setIsMuted(micShouldBeMuted)
+    isMutedRef.current = micShouldBeMuted
+    if (voiceEngineRef.current) {
+      if (!micShouldBeMuted) {
+        if (typeof voiceEngineRef.current.unmuteAndStartListening === 'function') {
+          voiceEngineRef.current.unmuteAndStartListening()
+        } else {
+          voiceEngineRef.current.setMicrophoneMuted(false)
+        }
+      } else {
+        voiceEngineRef.current.setMicrophoneMuted(true)
+      }
+    }
+    setVoiceState(micShouldBeMuted ? 'MUTED' : 'LISTENING')
   }
 
   // 2-second warmup buffer after arriving in room before AI speaks
   const [roomStartupCountdown, setRoomStartupCountdown] = useState(2)
+  const roomStartupCountdownRef = useRef(2)
+  roomStartupCountdownRef.current = roomStartupCountdown
   const hasTriggeredInterviewStartRef = useRef(false)
 
   // Activate Proctoring Telemetry Tracker on session start (Strict 3-warning limit)
@@ -340,7 +449,14 @@ export default function InterviewRoomPage() {
 
           try {
             const targetId = session?.interview_id || session?.id || 'auto'
-            await interviewService.completeInterview(targetId, token)
+            await interviewService.completeInterview(targetId, token, '', null, {
+              is_terminated: true,
+              terminated_for_violations: true,
+              warning_count: count || 3,
+              max_warnings: maxWarnings || 3,
+              reason: reason || 'Assessment automatically terminated: Exceeded 3-warning security limit due to repeated integrity violations.',
+              history: history || warningsHistory || [],
+            })
           } catch (err) {
             console.warn('Auto-termination completion notice:', err.message)
           }
@@ -437,6 +553,9 @@ export default function InterviewRoomPage() {
 
     const normalized = normalizeQuestion(qObj, qText, incomingSeq)
     setActiveQuestion(normalized)
+    activeQuestionRef.current = normalized
+    hasCandidateRespondedRef.current = false
+    setHasCandidateResponded(false)
 
     // Record authoritative AI Question into transcripts SMS dialogue stream
     setTranscripts((prev) => {
@@ -480,7 +599,32 @@ export default function InterviewRoomPage() {
     voiceStateRef.current = 'SPEAKING'
     setVoiceState('SPEAKING')
     setNudgeCount(0)
+    nudgeCountRef.current = 0
     setSilenceSeconds(0)
+    silenceSecondsRef.current = 0
+    lastUserActivityTimeRef.current = Date.now()
+
+    // Reset manual mic override for newly active question
+    manualMicOverrideRef.current = false
+    setManualMicOverride(false)
+
+    // Apply default mic policy immediately for newly active question
+    const defaultMicOn = getDefaultMicEnabled(normalized)
+    const initialMicMuted = !defaultMicOn
+    autoMutedForNonDescriptiveRef.current = initialMicMuted
+    setIsMuted(initialMicMuted)
+    isMutedRef.current = initialMicMuted
+    if (voiceEngineRef.current) {
+      if (defaultMicOn) {
+        if (typeof voiceEngineRef.current.unmuteAndStartListening === 'function') {
+          voiceEngineRef.current.unmuteAndStartListening()
+        } else {
+          voiceEngineRef.current.setMicrophoneMuted(false)
+        }
+      } else {
+        voiceEngineRef.current.setMicrophoneMuted(true)
+      }
+    }
 
     if (typeof event.remainingSeconds === 'number') {
       setRemainingSeconds(event.remainingSeconds)
@@ -553,9 +697,36 @@ export default function InterviewRoomPage() {
           hydratedSeq
         )
         setActiveQuestion(normalized)
-        startScriptReveal(data.currentQuestion?.spoken_lead_in || initialQ)
+        activeQuestionRef.current = normalized
+        hasCandidateRespondedRef.current = false
+        setHasCandidateResponded(false)
+        manualMicOverrideRef.current = false
+        setManualMicOverride(false)
+
+        const defaultMicOn = getDefaultMicEnabled(normalized)
+        const initialMicMuted = !defaultMicOn
+        autoMutedForNonDescriptiveRef.current = initialMicMuted
+        setIsMuted(initialMicMuted)
+        isMutedRef.current = initialMicMuted
+        if (voiceEngineRef.current) {
+          if (defaultMicOn) {
+            if (typeof voiceEngineRef.current.unmuteAndStartListening === 'function') {
+              voiceEngineRef.current.unmuteAndStartListening()
+            } else {
+              voiceEngineRef.current.setMicrophoneMuted(false)
+            }
+          } else {
+            voiceEngineRef.current.setMicrophoneMuted(true)
+          }
+        }
+        const spokenLead = data.currentQuestion?.spoken_lead_in || initialQ
+        startScriptReveal(spokenLead)
         isCandidateTurnLockedRef.current = true
         setVoiceState('SPEAKING')
+        pendingAiSpeechRef.current = { text: spokenLead, sequence: hydratedSeq }
+        if (voiceEngineRef.current?.hasEnteredRoom) {
+          voiceEngineRef.current.speakAiQuestion(spokenLead)
+        }
 
         setTranscripts((prev) => {
           if (prev.length > 0) return prev
@@ -635,6 +806,7 @@ export default function InterviewRoomPage() {
       const timer = setTimeout(() => {
         setRoomStartupCountdown((prev) => {
           const next = prev - 1
+          roomStartupCountdownRef.current = next
           if (next <= 0) {
             hasTriggeredInterviewStartRef.current = true
             console.log(
@@ -652,7 +824,7 @@ export default function InterviewRoomPage() {
     }
   }, [session?.id, isLoading, isCompleted, roomStartupCountdown])
 
-  // Guarantee audible filler nudge output to candidate's headphones/speakers
+  // Guarantee audible filler nudge output using the unified CosyVoice audio pipeline
   const speakFillerNudgeAloud = (level = 1) => {
     let spokenText = ''
     if (voiceEngineRef.current && typeof voiceEngineRef.current.triggerSilenceNudge === 'function') {
@@ -661,44 +833,112 @@ export default function InterviewRoomPage() {
 
     if (!spokenText) {
       const nudge1Phrases = [
+        "Whenever you're ready, you can answer. I'm still here.",
         "I am here, you can just answer it. You can answer it in your own way.",
-        "Take your time, I am here. You can just answer it in your own way.",
-        "I'm here, feel free to answer however you are most comfortable."
+        "Take your time, I am here. You can just answer it in your own way."
       ]
       const nudge2Phrases = [
+        "Take your time. You can answer whenever you're ready.",
         "Whenever you're ready, feel free to answer, or we can move forward.",
-        "I am still here. Feel free to answer in your own words, or we can move to the next question.",
-        "Just checking in—take your time, or we can move forward whenever you're ready."
+        "I am still here. Feel free to answer in your own words, or we can move to the next question."
       ]
       spokenText = level === 1
         ? nudge1Phrases[Math.floor(Math.random() * nudge1Phrases.length)]
         : nudge2Phrases[Math.floor(Math.random() * nudge2Phrases.length)]
-
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        try {
-          if (window.speechSynthesis.paused) window.speechSynthesis.resume()
-          window.speechSynthesis.cancel()
-          const utterance = new SpeechSynthesisUtterance(spokenText)
-          utterance.volume = 1.0
-          utterance.rate = 1.0
-          utterance.pitch = 1.0
-          utterance.lang = 'en-US'
-          setVoiceState('SPEAKING')
-          utterance.onend = () => setVoiceState('LISTENING')
-          utterance.onerror = () => setVoiceState('LISTENING')
-          setTimeout(() => setVoiceState('LISTENING'), 4500)
-          window.speechSynthesis.speak(utterance)
-        } catch (e) {
-          console.warn('[InterviewRoom] Direct speechSynthesis fallback failed:', e)
-        }
+      if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
+        voiceEngineRef.current.speakAiQuestion(spokenText)
       }
     }
 
+    isCandidateTurnLockedRef.current = true
+    voiceStateRef.current = 'SPEAKING'
+    setVoiceState('SPEAKING')
+    silenceSecondsRef.current = 0
+    setSilenceSeconds(0)
+    lastUserActivityTimeRef.current = Date.now()
     setLiveAiSpeech(spokenText)
+    startScriptReveal(spokenText)
+
+    // Safety turn watchdog: if filler speech audio ends or gets dropped, guarantee turn concludes cleanly within 6s
+    setTimeout(() => {
+      if (voiceStateRef.current === 'SPEAKING' && isCandidateTurnLockedRef.current) {
+        console.warn('[InterviewRoom] Safety filler turn watchdog concluded speaking turn.')
+        concludeSpeakingAndPassMic()
+      }
+    }, 6000)
+
     return spokenText
   }
 
-  // AI Evaluator Silence & Patience Monitor (10s initial silence -> Nudge 1 -> 5s -> Nudge 2 -> 5s -> Advance)
+  // User Activity Tracker for Non-Descriptive / Interactive Questions
+  // (Multiple choice, fill in the blanks, code output, code writing, SQL, boolean, etc.)
+  // Detects keyboard typing, mouse movements, clicks, and scrolls so candidates are never interrupted while working.
+  useEffect(() => {
+    const handleUserActivity = (evt) => {
+      if (
+        isCompleted ||
+        isLoading ||
+        voiceStateRef.current === 'SPEAKING' ||
+        isCandidateTurnLockedRef.current
+      ) {
+        return
+      }
+
+      const evtType = evt?.type || ''
+      const currentActiveQ = activeQuestionRef.current
+      const isVoiceQ = isLongFormVoiceQuestion(currentActiveQ)
+
+      // On descriptive / short answer voice questions, only actual speech or typing/submitting answers counts as activity.
+      // Passive mouse hover or mouse movement must NEVER reset voice silence or cancel filler nudges!
+      if (isVoiceQ && (evtType === 'mousemove' || evtType === 'wheel')) {
+        return
+      }
+
+      lastUserActivityTimeRef.current = Date.now()
+      silenceSecondsRef.current = 0
+
+      // If candidate was in a nudged state, fresh activity shows engagement has resumed:
+      if (nudgeCountRef.current > 0) {
+        nudgeCountRef.current = 0
+        setNudgeCount(0)
+      }
+    }
+
+    let lastThrottledActivity = 0
+    const handleThrottledActivity = (evt) => {
+      const now = Date.now()
+      if (now - lastThrottledActivity > 800) {
+        lastThrottledActivity = now
+        handleUserActivity(evt)
+      }
+    }
+
+    // Deliberate user interaction (clicks, keys, inputs, touches, mouse moves, scrolls)
+    const immediateEvents = ['mousedown', 'keydown', 'input', 'touchstart']
+    immediateEvents.forEach((evt) => {
+      window.addEventListener(evt, handleUserActivity, { passive: true, capture: true })
+    })
+    const throttledEvents = ['mousemove', 'wheel']
+    throttledEvents.forEach((evt) => {
+      window.addEventListener(evt, handleThrottledActivity, { passive: true, capture: true })
+    })
+
+    return () => {
+      immediateEvents.forEach((evt) => {
+        window.removeEventListener(evt, handleUserActivity, { capture: true })
+      })
+      throttledEvents.forEach((evt) => {
+        window.removeEventListener(evt, handleThrottledActivity, { capture: true })
+      })
+    }
+  }, [isCompleted, isLoading])
+
+  // AI Evaluator Silence & Inactivity Cadence:
+  // - Per-question stage durations (15s for MCQ, 20s for code output/fill-in-blank, 45s for code writing/SQL).
+  // - For voice/descriptive questions: exactly 15s to START responding.
+  //   CRITICAL: Once candidate begins speaking or typing their answer, NO TIME LIMIT applies!
+  // - If idle without responding: Stage 1 -> Filler Nudge #1 -> Stage 2 -> Filler Nudge #2 -> Stage 3 -> Skip question.
+  // - After 3 consecutive unanswered questions, the interview session automatically terminates.
   useEffect(() => {
     if (
       isCompleted ||
@@ -714,97 +954,116 @@ export default function InterviewRoomPage() {
     }
 
     const interval = setInterval(() => {
-      // 1. Active Speech Pause Watchdog:
-      // If candidate has spoken text (>= 4 chars), has paused for >= 6.0s (5-7s calibration requirement),
-      // candidate turn is unlocked, and is not currently submitting:
-      const recordedSpeech = (candidateSpeechBufferRef.current || candidateInterimTextRef.current || '').trim()
-      const timeSinceLastSpeech = Date.now() - (lastSpeechActivityTimeRef.current || 0)
+      // 0. AI is speaking, candidate turn is locked, warmup active, submitting, or completed:
+      if (
+        voiceStateRef.current === 'SPEAKING' ||
+        isCandidateTurnLockedRef.current ||
+        roomStartupCountdownRef.current > 0 ||
+        isSubmittingRef.current ||
+        isCompletedRef.current ||
+        isTerminatedForViolationsRef.current ||
+        isTerminatedForUnansweredRef.current ||
+        isLoading
+      ) {
+        silenceSecondsRef.current = 0
+        setSilenceSeconds(0)
+        return
+      }
+
       const currentActiveQ = activeQuestionRef.current
       const isVoiceQ = isLongFormVoiceQuestion(currentActiveQ)
+      const stageDuration = getQuestionStageDuration(currentActiveQ)
+      const recordedSpeech = (candidateSpeechBufferRef.current || candidateInterimTextRef.current || '').trim()
+      const typedAnswer = (typeof answerInputValueRef.current === 'string'
+        ? answerInputValueRef.current
+        : answerInputValueRef.current?.text || answerInputValueRef.current?.code || '').trim()
+      const currentAudioLvl = audioLevelRef.current || 0
 
-      if (
-        isVoiceQ &&
-        !isCandidateTurnLockedRef.current &&
-        recordedSpeech.length >= 4 &&
-        lastSpeechActivityTimeRef.current > 0 &&
-        timeSinceLastSpeech >= 6000 &&
-        !isSubmittingRef.current &&
-        !isCompleted &&
-        voiceStateRef.current !== 'SPEAKING'
-      ) {
-        if (isRepeatQuestionRequest(recordedSpeech)) {
-          console.log('[InterviewRoom] Pause watchdog intercepted repeat query:', recordedSpeech)
-          handleRepeatCurrentQuestion()
+      // Detect if candidate has started responding to a voice question (speech or text)
+      // Note: Audio decibels must NEVER mark candidate responded. Only actual transcribed speech or typed answers count!
+      if (isVoiceQ && !hasCandidateRespondedRef.current) {
+        if (recordedSpeech.length >= 3 || typedAnswer.length >= 3) {
+          hasCandidateRespondedRef.current = true
+          setHasCandidateResponded(true)
+        }
+      }
+
+      // 1. Unlimited answering time for Short Answer & Descriptive questions once candidate responds:
+      if (isVoiceQ && hasCandidateRespondedRef.current) {
+        const timeSinceLastSpeech = Date.now() - (lastSpeechActivityTimeRef.current || 0)
+
+        // Active Speech Pause Watchdog: After candidate speaks and pauses for 6.0s, auto-submit:
+        if (
+          !isCandidateTurnLockedRef.current &&
+          recordedSpeech.length >= 4 &&
+          lastSpeechActivityTimeRef.current > 0 &&
+          timeSinceLastSpeech >= 6000 &&
+          !isSubmittingRef.current &&
+          !isCompleted &&
+          voiceStateRef.current !== 'SPEAKING'
+        ) {
+          if (isRepeatQuestionRequest(recordedSpeech)) {
+            console.log('[InterviewRoom] Pause watchdog intercepted repeat query:', recordedSpeech)
+            handleRepeatCurrentQuestion()
+            return
+          }
+          console.log('[InterviewRoom] Pause watchdog triggered. Auto-submitting speech answer after 6.0s pause.')
+          if (autoSubmitTimerRef.current) {
+            clearTimeout(autoSubmitTimerRef.current)
+            autoSubmitTimerRef.current = null
+          }
+          if (handleSubmitAnswerRef.current) {
+            handleSubmitAnswerRef.current(recordedSpeech, 'VOICE')
+          }
           return
         }
-        console.log('[InterviewRoom] Pause watchdog triggered. Auto-submitting speech answer after 6.0s pause.')
-        if (autoSubmitTimerRef.current) {
-          clearTimeout(autoSubmitTimerRef.current)
-          autoSubmitTimerRef.current = null
-        }
-        if (handleSubmitAnswerRef.current) {
-          handleSubmitAnswerRef.current(recordedSpeech, 'VOICE')
-        }
-        return
-      }
 
-      // Active typing activity watchdog:
-      // If candidate was actively typing within the last 25 seconds, reset silence timer!
-      const hasRecentTyping = (Date.now() - (lastTypingActivityTimeRef.current || 0)) < 25000
-      const currentAudioLvl = audioLevelRef.current || 0
-      const isAiSpeaking = voiceStateRef.current === 'SPEAKING'
-      const isSubmittingNow = isSubmittingRef.current
-
-      if (
-        isAiSpeaking ||
-        currentAudioLvl > 0.25 ||
-        candidateInterimTextRef.current ||
-        hasRecentTyping ||
-        isSubmittingNow
-      ) {
+        // Candidate is actively responding on a voice question: NO time limit, NO filler nudges, NO skip!
+        silenceSecondsRef.current = 0
         setSilenceSeconds(0)
-        // If candidate started actively speaking / typing, reset nudgeCount back to 0
-        if (recordedSpeech.length >= 4 || hasRecentTyping) {
-          if (nudgeCountRef.current > 0) {
-            nudgeCountRef.current = 0
-            setNudgeCount(0)
-          }
-        }
         return
       }
 
-      // Candidate is truly silent:
-      setSilenceSeconds((prev) => {
-        const next = prev + 1
-        const currentNudges = nudgeCountRef.current
+      // 2. Compute elapsed inactivity duration from last verified user activity timestamp:
+      const idleMs = Date.now() - (lastUserActivityTimeRef.current || 0)
+      const idleSeconds = Math.max(0, Math.floor(idleMs / 1000))
+      silenceSecondsRef.current = idleSeconds
+      setSilenceSeconds(idleSeconds)
 
-        // Step 1: 10 seconds of initial question silence -> Speak Filler Nudge #1 aloud!
-        if (next >= 10 && currentNudges === 0) {
-          console.log('[InterviewRoom] 10s silence passed -> Speaking Filler Nudge #1 aloud')
-          nudgeCountRef.current = 1
-          setNudgeCount(1)
-          speakFillerNudgeAloud(1)
-          return 0
-        }
+      const currentNudges = nudgeCountRef.current
 
-        // Step 2: 5 seconds of silence after Nudge 1 -> Speak Filler Nudge #2 aloud!
-        if (next >= 5 && currentNudges === 1) {
-          console.log('[InterviewRoom] 5s silence passed after Nudge 1 -> Speaking Filler Nudge #2 aloud')
-          nudgeCountRef.current = 2
-          setNudgeCount(2)
-          speakFillerNudgeAloud(2)
-          return 0
-        }
+      // Step 1: Exactly stageDuration seconds of inactivity -> Speak Filler Nudge #1 aloud!
+      if (idleSeconds >= stageDuration && currentNudges === 0) {
+        console.log(`[InterviewRoom] ${stageDuration}s inactivity reached -> Speaking Filler Nudge #1 aloud`)
+        nudgeCountRef.current = 1
+        setNudgeCount(1)
+        lastUserActivityTimeRef.current = Date.now()
+        silenceSecondsRef.current = 0
+        setSilenceSeconds(0)
+        speakFillerNudgeAloud(1)
+        return
+      }
 
-        // Step 3: 5 seconds of silence after Nudge 2 -> Skip/advance to next question!
-        if (next >= 5 && currentNudges === 2) {
-          console.log('[InterviewRoom] 5s silence passed after Nudge 2 -> Skipping unanswered question')
-          handleSkipUnanswered()
-          return 0
-        }
+      // Step 2: Exactly stageDuration seconds of inactivity after Nudge 1 -> Speak Filler Nudge #2 aloud!
+      if (idleSeconds >= stageDuration && currentNudges === 1) {
+        console.log(`[InterviewRoom] ${stageDuration}s inactivity reached after Nudge 1 -> Speaking Filler Nudge #2 aloud`)
+        nudgeCountRef.current = 2
+        setNudgeCount(2)
+        lastUserActivityTimeRef.current = Date.now()
+        silenceSecondsRef.current = 0
+        setSilenceSeconds(0)
+        speakFillerNudgeAloud(2)
+        return
+      }
 
-        return next
-      })
+      // Step 3: Exactly stageDuration seconds of inactivity after Nudge 2 -> Skip/advance to next question!
+      if (idleSeconds >= stageDuration && currentNudges === 2) {
+        console.log(`[InterviewRoom] ${stageDuration}s inactivity reached after Nudge 2 -> Skipping unanswered question`)
+        silenceSecondsRef.current = 0
+        setSilenceSeconds(0)
+        handleSkipUnanswered()
+        return
+      }
     }, 1000)
 
     silenceTimerRef.current = interval
@@ -824,6 +1083,8 @@ export default function InterviewRoomPage() {
     nudgeCountRef.current = 0
     setNudgeCount(0)
     setSilenceSeconds(0)
+    hasCandidateRespondedRef.current = false
+    setHasCandidateResponded(false)
     const targetId = session?.id || session?.interview_id
     if (!targetId) return
 
@@ -839,10 +1100,10 @@ export default function InterviewRoomPage() {
         setIsTerminatedForUnanswered(true)
         setIsCompleted(true)
         const closingMsg = 'We have not received a response across three consecutive questions. This interview session has now concluded. Thank you for your time.'
-        if (voiceEngineRef.current && typeof voiceEngineRef.current.speakDirectSpeech === 'function') {
-          voiceEngineRef.current.speakDirectSpeech(closingMsg)
-        } else if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
+        if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
           voiceEngineRef.current.speakAiQuestion(closingMsg)
+        } else if (voiceEngineRef.current && typeof voiceEngineRef.current.speakDirectSpeech === 'function') {
+          voiceEngineRef.current.speakDirectSpeech(closingMsg)
         } else if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
           try {
             if (window.speechSynthesis.paused) window.speechSynthesis.resume()
@@ -873,10 +1134,10 @@ export default function InterviewRoomPage() {
         setIsTerminatedForUnanswered(true)
         setIsCompleted(true)
         const closingMsg = result.closingMessage || 'We have not received a response after three questions, so we will conclude here. Thank you for your time.'
-        if (voiceEngineRef.current && typeof voiceEngineRef.current.speakDirectSpeech === 'function') {
-          voiceEngineRef.current.speakDirectSpeech(closingMsg)
-        } else if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
+        if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
           voiceEngineRef.current.speakAiQuestion(closingMsg)
+        } else if (voiceEngineRef.current && typeof voiceEngineRef.current.speakDirectSpeech === 'function') {
+          voiceEngineRef.current.speakDirectSpeech(closingMsg)
         } else if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
           try {
             if (window.speechSynthesis.paused) window.speechSynthesis.resume()
@@ -975,8 +1236,14 @@ export default function InterviewRoomPage() {
     nudgeCountRef.current = 0
     setNudgeCount(0)
     setSilenceSeconds(0)
+    silenceSecondsRef.current = 0
+    lastUserActivityTimeRef.current = Date.now()
     unansweredCountRef.current = 0
     setUnansweredQuestionsCount(0) // Candidate gave an active response!
+    hasCandidateRespondedRef.current = false
+    setHasCandidateResponded(false)
+    manualMicOverrideRef.current = false
+    setManualMicOverride(false)
     setIsSubmitting(true)
     setVoiceState('THINKING')
     setError('')
@@ -1082,7 +1349,13 @@ export default function InterviewRoomPage() {
     lastSpeechActivityTimeRef.current = 0
 
     isCandidateTurnLockedRef.current = true
+    voiceStateRef.current = 'SPEAKING'
     setVoiceState('SPEAKING')
+    nudgeCountRef.current = 0
+    setNudgeCount(0)
+    silenceSecondsRef.current = 0
+    setSilenceSeconds(0)
+    lastUserActivityTimeRef.current = Date.now()
 
     const repeatPrompt = `Sure, let me repeat that: ${rawPrompt}`
     startScriptReveal(repeatPrompt)
@@ -1112,18 +1385,28 @@ export default function InterviewRoomPage() {
 
         const setupEngineCallbacks = (engine) => ({
           language: speechLanguage,
-          onStateChange: (state) => setVoiceState(state),
+          onStateChange: (state) => {
+            voiceStateRef.current = state
+            setVoiceState(state)
+          },
           onAudioLevel: (level) => {
             audioLevelRef.current = level
             setAudioLevel(level)
           },
           onAiAudioStarted: (msg) => {
+            voiceStateRef.current = 'SPEAKING'
+            setVoiceState('SPEAKING')
+            isCandidateTurnLockedRef.current = true
             if (msg?.spokenPrompt) {
               startScriptReveal(msg.spokenPrompt)
             }
           },
           onAiSpeechProgress: ({ progress }) => {
             audioProgressActiveRef.current = true
+            if (scriptFallbackTimeoutRef.current) {
+              clearTimeout(scriptFallbackTimeoutRef.current)
+              scriptFallbackTimeoutRef.current = null
+            }
             if (scriptFallbackTickerRef.current) {
               clearInterval(scriptFallbackTickerRef.current)
               scriptFallbackTickerRef.current = null
@@ -1199,6 +1482,18 @@ export default function InterviewRoomPage() {
             // 1. Single voice recording box: immediately reflect speech in candidate voice response box
             setCandidateInterimText(activeFullText)
             lastSpeechActivityTimeRef.current = Date.now()
+            lastUserActivityTimeRef.current = Date.now()
+            silenceSecondsRef.current = 0
+            if (nudgeCountRef.current > 0) {
+              nudgeCountRef.current = 0
+              setNudgeCount(0)
+            }
+            if (isLongFormVoiceQuestion(activeQuestionRef.current)) {
+              if (!hasCandidateRespondedRef.current) {
+                hasCandidateRespondedRef.current = true
+                setHasCandidateResponded(true)
+              }
+            }
 
             // 2. High-responsiveness silence detection & auto-submit:
             // STRICT REQUIREMENT: Only auto-submit voice answers for DESCRIPTIVE, SHORT_ANSWER, or BEHAVIORAL questions!
@@ -1244,12 +1539,12 @@ export default function InterviewRoomPage() {
               if (!cleanText) return
 
               if (isDelta) {
-                // If no pre-known spoken script is active, accumulate stream and reveal progressively
+                // If no pre-known spoken script is active, smoothly accumulate stream without resetting the reveal!
                 if (!targetSpokenScriptRef.current) {
                   liveAiSpeechStreamRef.current = liveAiSpeechStreamRef.current
                     ? `${liveAiSpeechStreamRef.current} ${cleanText}`
                     : cleanText
-                  startScriptReveal(liveAiSpeechStreamRef.current)
+                  setLiveAiSpeech(liveAiSpeechStreamRef.current)
                 }
                 return
               }
@@ -1257,8 +1552,8 @@ export default function InterviewRoomPage() {
               if (isFinal) {
                 setSilenceSeconds(0)
                 const finalText = cleanText || liveAiSpeechStreamRef.current
-                if (finalText && !targetSpokenScriptRef.current && voiceStateRef.current === 'SPEAKING') {
-                  startScriptReveal(finalText)
+                if (finalText && !targetSpokenScriptRef.current) {
+                  setLiveAiSpeech(finalText)
                 }
                 liveAiSpeechStreamRef.current = ''
 
@@ -1345,7 +1640,10 @@ export default function InterviewRoomPage() {
   }, [token, isCompleted, isLoading, Boolean(session?.id)])
 
   const handleToggleMute = () => {
-    autoMutedForNonDescriptiveRef.current = false
+    // Explicit candidate manual microphone action for this question (Requirements #2, #4, #26)
+    manualMicOverrideRef.current = true
+    setManualMicOverride(true)
+
     // If AI is currently speaking, toggling mute halts AI speech and immediately unlocks candidate mic and turn!
     if (voiceStateRef.current === 'SPEAKING' || isCandidateTurnLockedRef.current) {
       console.log('[InterviewRoom] Candidate clicked unmute during AI speech. Halting speech and passing mic immediately.')
@@ -1357,10 +1655,15 @@ export default function InterviewRoomPage() {
       const muted = voiceEngineRef.current.toggleMute()
       if (!muted) voiceCaptureCancelledRef.current = false
       setIsMuted(muted)
+      isMutedRef.current = muted
+      setVoiceState(muted ? 'MUTED' : 'LISTENING')
     } else {
       setIsMuted((prev) => {
-        if (prev) voiceCaptureCancelledRef.current = false
-        return !prev
+        const next = !prev
+        if (!next) voiceCaptureCancelledRef.current = false
+        isMutedRef.current = next
+        setVoiceState(next ? 'MUTED' : 'LISTENING')
+        return next
       })
     }
   }
@@ -1429,6 +1732,28 @@ export default function InterviewRoomPage() {
     }
   }, [token, session, isCompleted])
 
+  // Canonical Active Question State Model (Requirement #26)
+  const activeQuestionState = useMemo(() => {
+    const q = activeQuestion || currentQuestionData
+    const qType = q?.type || 'DESCRIPTIVE'
+    const defaultMic = getDefaultMicEnabled(q)
+    return {
+      questionId: q?.id || `q_${sequence}`,
+      questionType: qType,
+      inputMode: isLongFormVoiceQuestion(q) ? 'VOICE' : 'INTERACTIVE',
+      defaultMicEnabled: defaultMic,
+      manualMicOverride: manualMicOverride,
+      candidateResponded: Boolean(answerInputValue || candidateInterimText),
+      fillerCount: nudgeCount,
+    }
+  }, [activeQuestion, currentQuestionData, sequence, manualMicOverride, answerInputValue, candidateInterimText, nudgeCount])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__QUALIFYAI_ACTIVE_QUESTION_STATE__ = activeQuestionState
+    }
+  }, [activeQuestionState])
+
   // Loading Screen
   if (isLoading) {
     return (
@@ -1476,9 +1801,9 @@ export default function InterviewRoomPage() {
 
   // Silence Nudge Hint Text
   const silenceNudgeText = nudgeCount === 1 && voiceState !== 'SPEAKING'
-    ? "I am here, you can just answer it. You can answer it in your own way."
+    ? "Whenever you're ready, you can answer. I'm still here."
     : nudgeCount === 2 && voiceState !== 'SPEAKING'
-    ? "Whenever you're ready, feel free to answer, or we can move forward."
+    ? "Take your time. You can answer whenever you're ready."
     : null
 
   return (
@@ -2013,7 +2338,20 @@ export default function InterviewRoomPage() {
                     onChange={(val) => {
                       setAnswerInputValue(val)
                       lastTypingActivityTimeRef.current = Date.now()
+                      lastUserActivityTimeRef.current = Date.now()
+                      silenceSecondsRef.current = 0
                       setSilenceSeconds(0)
+                      if (nudgeCountRef.current > 0) {
+                        nudgeCountRef.current = 0
+                        setNudgeCount(0)
+                      }
+                      const valStr = typeof val === 'string' ? val : val?.text || val?.code || ''
+                      if (valStr.trim().length >= 3 && isLongFormVoiceQuestion(activeQuestionRef.current)) {
+                        if (!hasCandidateRespondedRef.current) {
+                          hasCandidateRespondedRef.current = true
+                          setHasCandidateResponded(true)
+                        }
+                      }
                     }}
                     onSubmit={(payload) => handleSubmitAnswer(payload)}
                     isSubmitting={isSubmitting}

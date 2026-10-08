@@ -108,7 +108,7 @@ export const interviewController = {
   async completeInterview(req, res, next) {
     try {
       const interviewId = req.params.id
-      const { token, feedback, feedbackRating } = req.body
+      const { token, feedback, feedbackRating, terminationMetadata } = req.body
       assertValid(validateText(token, 'Invitation token', { min: 8, max: 255, required: true }))
 
       const result = await interviewEngineService.completeInterview({
@@ -116,6 +116,7 @@ export const interviewController = {
         token,
         feedback,
         feedbackRating,
+        terminationMetadata,
       })
 
       return res.status(200).json({

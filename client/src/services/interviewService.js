@@ -71,11 +71,11 @@ export const interviewService = {
   /**
    * Candidate explicitly completes or wraps up interview
    */
-  async completeInterview(interviewId, token, feedback = '', feedbackRating = null) {
+  async completeInterview(interviewId, token, feedback = '', feedbackRating = null, terminationMetadata = null) {
     const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, feedback, feedbackRating }),
+      body: JSON.stringify({ token, feedback, feedbackRating, terminationMetadata }),
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
