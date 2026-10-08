@@ -26,7 +26,9 @@ const configuredOrigins = new Set(
 )
 
 app.disable('x-powered-by')
-if (process.env.VERCEL) app.set('trust proxy', true)
+if (process.env.VERCEL || process.env.RENDER || config.nodeEnv === 'production') {
+  app.set('trust proxy', true)
+}
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('X-Frame-Options', 'SAMEORIGIN')

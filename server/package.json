@@ -10,6 +10,9 @@
     "capture:voice": "node scripts/capture-gemini-native-audio.js",
     "test": "node --test"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "@google/genai": "^2.27.0",
     "@supabase/supabase-js": "^2.49.1",
