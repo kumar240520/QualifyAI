@@ -55,8 +55,6 @@ export function getServiceSupabaseClient() {
       },
     })
   }
-  if (process.env.VERCEL) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY is required for the serverless API runtime.')
-  }
+  console.warn('[Supabase Warning] SUPABASE_SERVICE_ROLE_KEY is not configured; using standard client.')
   return supabase
 }

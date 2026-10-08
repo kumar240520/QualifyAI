@@ -163,6 +163,13 @@ export default function InterviewRoomPage() {
   const [isTerminatedForUnanswered, setIsTerminatedForUnanswered] = useState(false)
   const [silenceSeconds, setSilenceSeconds] = useState(0)
   const silenceTimerRef = useRef(null)
+  const nudgeCountRef = useRef(0)
+  nudgeCountRef.current = nudgeCount
+  const unansweredCountRef = useRef(0)
+  unansweredCountRef.current = unansweredQuestionsCount
+  const audioLevelRef = useRef(0)
+  const candidateInterimTextRef = useRef('')
+  candidateInterimTextRef.current = candidateInterimText
 
   // Assessment Integrity & 3-Warnings Proctoring State
   const [warningsCount, setWarningsCount] = useState(0)
@@ -304,8 +311,9 @@ export default function InterviewRoomPage() {
 
   // Activate Proctoring Telemetry Tracker on session start (Strict 3-warning limit)
   useEffect(() => {
-    if (session?.interview_id && !isCompleted && !isTerminatedForViolations) {
-      proctoringTrackerRef.current = proctoringService.createTracker(session.interview_id, {
+    const interviewId = session?.interview_id || session?.id
+    if (interviewId && !isCompleted && !isTerminatedForViolations) {
+      proctoringTrackerRef.current = proctoringService.createTracker(interviewId, {
         token,
         maxWarnings: 3,
         onWarning: ({ count, maxWarnings, violation, message }) => {
@@ -343,17 +351,21 @@ export default function InterviewRoomPage() {
         proctoringTrackerRef.current?.destroy()
       }
     }
-  }, [session?.interview_id, isCompleted, isTerminatedForViolations, token])
+  }, [session?.interview_id, session?.id, isCompleted, isTerminatedForViolations, token])
 
   // MediaPipe processes camera frames on-device. Only sustained event metadata is sent to the API.
   useEffect(() => {
-    if (!session?.interview_id || isCompleted || isTerminatedForViolations) return undefined
+    const interviewId = session?.interview_id || session?.id
+    if (!interviewId || isCompleted || isTerminatedForViolations || isTerminatedForUnanswered) return undefined
+    if (!cameraPreviewRef.current) return undefined
+
     const visual = new VisualProctoringService({
       video: cameraPreviewRef.current,
       onStatus: ({ cameraReady, facePresent, degraded, message }) => {
         setCameraStatus(degraded ? 'Camera analysis paused' : !cameraReady ? (message || 'Camera disconnected') : facePresent ? 'Camera active · face visible' : 'Camera active · center your face')
       },
       onEvent: (event) => {
+        console.warn('[VisualProctoring] Security violation event detected:', event.type, event.reason)
         proctoringTrackerRef.current?.triggerViolation(event.type, event.reason, event.severity, {
           source: event.source,
           confidence: event.confidence,
@@ -361,6 +373,13 @@ export default function InterviewRoomPage() {
           timestamp: event.timestamp,
           ...event.metadata,
         })
+        if (event.type === 'FACE_ABSENT') {
+          setIntegrityWarning('Face not detected! Please keep your face centered in the camera.')
+          setTimeout(() => setIntegrityWarning(null), 4000)
+        } else if (event.type === 'MULTIPLE_FACES') {
+          setIntegrityWarning('Multiple faces detected in camera frame.')
+          setTimeout(() => setIntegrityWarning(null), 4000)
+        }
       },
     })
     visualProctoringRef.current = visual
@@ -372,7 +391,7 @@ export default function InterviewRoomPage() {
       visual.stop()
       if (visualProctoringRef.current === visual) visualProctoringRef.current = null
     }
-  }, [session?.interview_id, isCompleted, isTerminatedForViolations])
+  }, [session?.interview_id, session?.id, isCompleted, isTerminatedForViolations, isTerminatedForUnanswered])
 
   // Fullscreen state listener: prompt modal if candidate exits fullscreen
   useEffect(() => {
@@ -633,16 +652,64 @@ export default function InterviewRoomPage() {
     }
   }, [session?.id, isLoading, isCompleted, roomStartupCountdown])
 
-  // AI Evaluator Silence & Patience Monitor (10s intervals for nudges & advance)
+  // Guarantee audible filler nudge output to candidate's headphones/speakers
+  const speakFillerNudgeAloud = (level = 1) => {
+    let spokenText = ''
+    if (voiceEngineRef.current && typeof voiceEngineRef.current.triggerSilenceNudge === 'function') {
+      spokenText = voiceEngineRef.current.triggerSilenceNudge(level)
+    }
+
+    if (!spokenText) {
+      const nudge1Phrases = [
+        "I am here, you can just answer it. You can answer it in your own way.",
+        "Take your time, I am here. You can just answer it in your own way.",
+        "I'm here, feel free to answer however you are most comfortable."
+      ]
+      const nudge2Phrases = [
+        "Whenever you're ready, feel free to answer, or we can move forward.",
+        "I am still here. Feel free to answer in your own words, or we can move to the next question.",
+        "Just checking in—take your time, or we can move forward whenever you're ready."
+      ]
+      spokenText = level === 1
+        ? nudge1Phrases[Math.floor(Math.random() * nudge1Phrases.length)]
+        : nudge2Phrases[Math.floor(Math.random() * nudge2Phrases.length)]
+
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          if (window.speechSynthesis.paused) window.speechSynthesis.resume()
+          window.speechSynthesis.cancel()
+          const utterance = new SpeechSynthesisUtterance(spokenText)
+          utterance.volume = 1.0
+          utterance.rate = 1.0
+          utterance.pitch = 1.0
+          utterance.lang = 'en-US'
+          setVoiceState('SPEAKING')
+          utterance.onend = () => setVoiceState('LISTENING')
+          utterance.onerror = () => setVoiceState('LISTENING')
+          setTimeout(() => setVoiceState('LISTENING'), 4500)
+          window.speechSynthesis.speak(utterance)
+        } catch (e) {
+          console.warn('[InterviewRoom] Direct speechSynthesis fallback failed:', e)
+        }
+      }
+    }
+
+    setLiveAiSpeech(spokenText)
+    return spokenText
+  }
+
+  // AI Evaluator Silence & Patience Monitor (10s initial silence -> Nudge 1 -> 5s -> Nudge 2 -> 5s -> Advance)
   useEffect(() => {
     if (
       isCompleted ||
       isTerminatedForViolations ||
       isTerminatedForUnanswered ||
-      isLoading ||
-      isSubmitting
+      isLoading
     ) {
-      if (silenceTimerRef.current) clearInterval(silenceTimerRef.current)
+      if (silenceTimerRef.current) {
+        clearInterval(silenceTimerRef.current)
+        silenceTimerRef.current = null
+      }
       return
     }
 
@@ -650,7 +717,7 @@ export default function InterviewRoomPage() {
       // 1. Active Speech Pause Watchdog:
       // If candidate has spoken text (>= 4 chars), has paused for >= 6.0s (5-7s calibration requirement),
       // candidate turn is unlocked, and is not currently submitting:
-      const recordedSpeech = (candidateSpeechBufferRef.current || candidateInterimText || '').trim()
+      const recordedSpeech = (candidateSpeechBufferRef.current || candidateInterimTextRef.current || '').trim()
       const timeSinceLastSpeech = Date.now() - (lastSpeechActivityTimeRef.current || 0)
       const currentActiveQ = activeQuestionRef.current
       const isVoiceQ = isLongFormVoiceQuestion(currentActiveQ)
@@ -684,41 +751,54 @@ export default function InterviewRoomPage() {
       // Active typing activity watchdog:
       // If candidate was actively typing within the last 25 seconds, reset silence timer!
       const hasRecentTyping = (Date.now() - (lastTypingActivityTimeRef.current || 0)) < 25000
+      const currentAudioLvl = audioLevelRef.current || 0
+      const isAiSpeaking = voiceStateRef.current === 'SPEAKING'
+      const isSubmittingNow = isSubmittingRef.current
 
       if (
-        voiceState === 'SPEAKING' ||
-        audioLevel > 0.20 ||
-        candidateInterimText ||
+        isAiSpeaking ||
+        currentAudioLvl > 0.25 ||
+        candidateInterimTextRef.current ||
         hasRecentTyping ||
-        isSubmitting
+        isSubmittingNow
       ) {
         setSilenceSeconds(0)
+        // If candidate started actively speaking / typing, reset nudgeCount back to 0
+        if (recordedSpeech.length >= 4 || hasRecentTyping) {
+          if (nudgeCountRef.current > 0) {
+            nudgeCountRef.current = 0
+            setNudgeCount(0)
+          }
+        }
         return
       }
 
+      // Candidate is truly silent:
       setSilenceSeconds((prev) => {
         const next = prev + 1
+        const currentNudges = nudgeCountRef.current
 
-        // Silence Nudge 1: after 35 seconds of true silence (allows candidate time to read options/code)
-        if (next >= 35 && nudgeCount === 0) {
+        // Step 1: 10 seconds of initial question silence -> Speak Filler Nudge #1 aloud!
+        if (next >= 10 && currentNudges === 0) {
+          console.log('[InterviewRoom] 10s silence passed -> Speaking Filler Nudge #1 aloud')
+          nudgeCountRef.current = 1
           setNudgeCount(1)
-          if (voiceEngineRef.current) {
-            voiceEngineRef.current.triggerSilenceNudge(1)
-          }
+          speakFillerNudgeAloud(1)
           return 0
         }
 
-        // Silence Nudge 2: after another 30 seconds of true silence (65s total)
-        if (next >= 30 && nudgeCount === 1) {
+        // Step 2: 5 seconds of silence after Nudge 1 -> Speak Filler Nudge #2 aloud!
+        if (next >= 5 && currentNudges === 1) {
+          console.log('[InterviewRoom] 5s silence passed after Nudge 1 -> Speaking Filler Nudge #2 aloud')
+          nudgeCountRef.current = 2
           setNudgeCount(2)
-          if (voiceEngineRef.current) {
-            voiceEngineRef.current.triggerSilenceNudge(2)
-          }
+          speakFillerNudgeAloud(2)
           return 0
         }
 
-        // After Nudge 2 (another 35 seconds = 100s total without response): Skip question
-        if (next >= 35 && nudgeCount === 2) {
+        // Step 3: 5 seconds of silence after Nudge 2 -> Skip/advance to next question!
+        if (next >= 5 && currentNudges === 2) {
+          console.log('[InterviewRoom] 5s silence passed after Nudge 2 -> Skipping unanswered question')
           handleSkipUnanswered()
           return 0
         }
@@ -728,39 +808,91 @@ export default function InterviewRoomPage() {
     }, 1000)
 
     silenceTimerRef.current = interval
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      silenceTimerRef.current = null
+    }
   }, [
-    voiceState,
-    audioLevel,
-    candidateInterimText,
-    answerInputValue,
-    nudgeCount,
     isCompleted,
     isTerminatedForViolations,
     isTerminatedForUnanswered,
     isLoading,
-    isSubmitting,
   ])
 
-
-
-  // After two check-ins, ask the canonical interviewer to choose the next question.
+  // After two filler nudges, advance to next question or conclude after 3 consecutive unanswered questions
   const handleSkipUnanswered = async () => {
+    nudgeCountRef.current = 0
     setNudgeCount(0)
     setSilenceSeconds(0)
-    if (!session?.id) return
+    const targetId = session?.id || session?.interview_id
+    if (!targetId) return
+
     setIsSubmitting(true)
     try {
-      const result = await interviewService.advanceAfterSilence(session.id, token)
-      const nextCount = result.session?.session_metadata?.unanswered_questions_in_a_row
-      if (typeof nextCount === 'number') setUnansweredQuestionsCount(nextCount)
+      const nextCount = unansweredCountRef.current + 1
+      unansweredCountRef.current = nextCount
+      setUnansweredQuestionsCount(nextCount)
+
+      // Conclude immediately if 3 consecutive questions received no answer
+      if (nextCount >= 3) {
+        console.warn('[InterviewRoom] 3 consecutive questions unanswered. Concluding interview session.')
+        setIsTerminatedForUnanswered(true)
+        setIsCompleted(true)
+        const closingMsg = 'We have not received a response across three consecutive questions. This interview session has now concluded. Thank you for your time.'
+        if (voiceEngineRef.current && typeof voiceEngineRef.current.speakDirectSpeech === 'function') {
+          voiceEngineRef.current.speakDirectSpeech(closingMsg)
+        } else if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
+          voiceEngineRef.current.speakAiQuestion(closingMsg)
+        } else if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          try {
+            if (window.speechSynthesis.paused) window.speechSynthesis.resume()
+            window.speechSynthesis.cancel()
+            const u = new SpeechSynthesisUtterance(closingMsg)
+            u.volume = 1.0
+            window.speechSynthesis.speak(u)
+          } catch (_) {}
+        }
+        setLiveAiSpeech(closingMsg)
+        try {
+          const compId = session?.interview_id || session?.id || 'auto'
+          await interviewService.completeInterview(compId, token)
+        } catch (err) {
+          console.warn('Auto-termination complete notice:', err.message)
+        }
+        return
+      }
+
+      const result = await interviewService.advanceAfterSilence(targetId, token)
+      const serverCount = result.session?.session_metadata?.unanswered_questions_in_a_row
+      if (typeof serverCount === 'number') {
+        const syncd = Math.max(nextCount, serverCount)
+        unansweredCountRef.current = syncd
+        setUnansweredQuestionsCount(syncd)
+      }
       if (result.isCompleted) {
         setIsTerminatedForUnanswered(true)
         setIsCompleted(true)
-        if (voiceEngineRef.current) voiceEngineRef.current.speakAiQuestion(result.closingMessage || 'We have not received a response after three questions, so we will conclude here. Thank you for your time.')
+        const closingMsg = result.closingMessage || 'We have not received a response after three questions, so we will conclude here. Thank you for your time.'
+        if (voiceEngineRef.current && typeof voiceEngineRef.current.speakDirectSpeech === 'function') {
+          voiceEngineRef.current.speakDirectSpeech(closingMsg)
+        } else if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
+          voiceEngineRef.current.speakAiQuestion(closingMsg)
+        } else if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          try {
+            if (window.speechSynthesis.paused) window.speechSynthesis.resume()
+            window.speechSynthesis.cancel()
+            const u = new SpeechSynthesisUtterance(closingMsg)
+            u.volume = 1.0
+            window.speechSynthesis.speak(u)
+          } catch (_) {}
+        }
+        setLiveAiSpeech(closingMsg)
         return
       }
       if (result.nextQuestion) {
+        nudgeCountRef.current = 0
+        setNudgeCount(0)
+        setSilenceSeconds(0)
         handleIncomingAiQuestion({
           sequence: result.sequence,
           question: result.nextQuestion,
@@ -840,8 +972,10 @@ export default function InterviewRoomPage() {
     setCandidateInterimText('')
     lastScheduledTextRef.current = ''
     lastSpeechActivityTimeRef.current = 0
+    nudgeCountRef.current = 0
     setNudgeCount(0)
     setSilenceSeconds(0)
+    unansweredCountRef.current = 0
     setUnansweredQuestionsCount(0) // Candidate gave an active response!
     setIsSubmitting(true)
     setVoiceState('THINKING')
@@ -979,7 +1113,10 @@ export default function InterviewRoomPage() {
         const setupEngineCallbacks = (engine) => ({
           language: speechLanguage,
           onStateChange: (state) => setVoiceState(state),
-          onAudioLevel: (level) => setAudioLevel(level),
+          onAudioLevel: (level) => {
+            audioLevelRef.current = level
+            setAudioLevel(level)
+          },
           onAiAudioStarted: (msg) => {
             if (msg?.spokenPrompt) {
               startScriptReveal(msg.spokenPrompt)
@@ -1339,9 +1476,9 @@ export default function InterviewRoomPage() {
 
   // Silence Nudge Hint Text
   const silenceNudgeText = nudgeCount === 1 && voiceState !== 'SPEAKING'
-    ? "I am here, take your time. You can just tell me or submit when you are done."
+    ? "I am here, you can just answer it. You can answer it in your own way."
     : nudgeCount === 2 && voiceState !== 'SPEAKING'
-    ? "Whenever you're ready, feel free to submit your solution, or we can move on to the next question."
+    ? "Whenever you're ready, feel free to answer, or we can move forward."
     : null
 
   return (
@@ -1897,6 +2034,39 @@ export default function InterviewRoomPage() {
             />
           </>
         )}
+
+        {/* Candidate Camera Proctoring Tile & Mirror Feed */}
+        <div
+          className={`fixed bottom-4 right-4 z-40 flex flex-col items-end gap-1.5 transition-all duration-300 ${
+            isCompleted || isTerminatedForViolations || isTerminatedForUnanswered ? 'opacity-0 pointer-events-none' : 'opacity-100'
+          }`}
+        >
+          <div
+            className={`relative overflow-hidden rounded-2xl border-2 bg-slate-900 shadow-2xl transition-all duration-300 w-36 h-28 sm:w-44 sm:h-32 ${
+              cameraStatus.includes('face visible')
+                ? 'border-emerald-500/80 shadow-emerald-500/10'
+                : 'border-rose-500/80 shadow-rose-500/20 animate-pulse'
+            }`}
+          >
+            <video
+              ref={cameraPreviewRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover -scale-x-100"
+            />
+            <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-xs text-[10px] text-white font-medium select-none">
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  cameraStatus.includes('face visible') ? 'bg-emerald-400' : 'bg-rose-400 animate-ping'
+                }`}
+              />
+              <span className="truncate max-w-[95px]">
+                {cameraStatus.includes('face visible') ? 'Face In Frame' : 'Face Away'}
+              </span>
+            </div>
+          </div>
+        </div>
       </main>
     </div>
   )

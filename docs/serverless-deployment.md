@@ -2,7 +2,7 @@
 
 ## Runtime layout
 
-- Vercel serves the Vite build from `client/dist` and routes `/api/*` to `api/[...path].js`.
+- Vercel serves the Vite build from `client/dist` and routes `/api/*` to `api/index.js` in a single unified Vercel deployment.
 - `server/src/app.js` is the Express API app. `server/src/server.js` is only the local development listener; production does not call `listen()` or start a WebSocket server.
 - Interviewer text is analyzed by the existing server-side Gemini interview services. Spoken prompts are streamed from `/api/voice/synthesize` with CosyVoice as the primary TTS provider, so no Gemini Live key or voice socket is exposed to the browser.
 - Set `COSYVOICE_API_URL` to a publicly reachable, authenticated CosyVoice-compatible service on Vercel; the default localhost URL is for local development only.

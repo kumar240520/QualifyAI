@@ -111,22 +111,26 @@ export default function InterviewHeader({
             <span className="hidden lg:inline">Proctoring Active</span>
           </div>
 
-          {/* Warnings Counter */}
-          {warningsCount > 0 && (
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-sans font-bold border transition-all tracking-normal shadow-2xs ${
-                warningsCount === 1
-                  ? 'bg-amber-50 border-amber-300 text-amber-900 animate-pulse'
-                  : warningsCount === 2
-                  ? 'bg-orange-50 border-orange-300 text-orange-900 animate-pulse'
-                  : 'bg-rose-100 border-rose-300 text-rose-900'
+          {/* Warnings Counter: Always visible per proctoring policy */}
+          <div
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-sans font-bold border transition-all tracking-normal shadow-2xs ${
+              warningsCount === 0
+                ? 'bg-slate-50 border-slate-200/90 text-slate-700'
+                : warningsCount === 1
+                ? 'bg-amber-50 border-amber-300 text-amber-900 animate-pulse'
+                : warningsCount === 2
+                ? 'bg-orange-50 border-orange-300 text-orange-900 animate-pulse'
+                : 'bg-rose-100 border-rose-300 text-rose-900'
+            }`}
+            title={`Security Warnings: ${warningsCount} of ${maxWarnings}`}
+          >
+            <ShieldAlert
+              className={`w-3.5 h-3.5 shrink-0 ${
+                warningsCount === 0 ? 'text-slate-400' : warningsCount >= 3 ? 'text-rose-600' : 'text-amber-600'
               }`}
-              title={`Security Warnings: ${warningsCount} of ${maxWarnings}`}
-            >
-              <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-              <span>Warnings: {warningsCount} / {maxWarnings}</span>
-            </div>
-          )}
+            />
+            <span>Warnings: {warningsCount} / {maxWarnings}</span>
+          </div>
 
           {/* End Assessment Button */}
           {!isCompleted && (

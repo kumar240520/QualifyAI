@@ -2,7 +2,7 @@ import http from 'http'
 import app from './app.js'
 import { config } from './config/env.js'
 
-// Local development adapter only. Vercel imports the stateless Express app from api/[...path].js.
+// Local development adapter only. Vercel imports the stateless Express app from api/index.js.
 const server = http.createServer(app)
 
 if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {

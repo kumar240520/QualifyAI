@@ -253,7 +253,24 @@ export class VoiceInterviewEngine {
       ])
     } catch (error) {
       if (error.name === 'AbortError' || this.isStopped) return
-      console.error('[VoiceEngine] CosyVoice synthesis failed:', error)
+      console.warn('[VoiceEngine] Server voice synthesis unavailable, falling back to client speech synthesis:', error.message)
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window && !this.isStopped) {
+        try {
+          window.speechSynthesis.cancel()
+          const utterance = new SpeechSynthesisUtterance(text)
+          utterance.lang = this.language || 'en-US'
+          utterance.rate = 1.0
+          this._updateState('SPEAKING')
+          await new Promise((resolve) => {
+            utterance.onend = resolve
+            utterance.onerror = resolve
+            window.speechSynthesis.speak(utterance)
+            setTimeout(resolve, 8000)
+          })
+          this._concludeAiSpeakingTurn()
+          return
+        } catch (_) {}
+      }
       this.onError(error.message || 'Interviewer voice could not be played.')
       this._handleAiTurnComplete({ audioTurnId, audioUnavailable: true })
     } finally {
@@ -397,6 +414,145 @@ export class VoiceInterviewEngine {
    */
   getAudioDiagnostics() {
     return { ...this.aiAudioPlayer.getState(), isAiTurnActive: this.isAiTurnActive, preventAiInterruption: this.preventAiInterruption }
+  }
+
+  /**
+   * Speak question or AI prompt aloud
+   */
+  speakAiQuestion(spokenText, force = false) {
+    if (!spokenText || this.isStopped) return
+    console.log('[VoiceEngine] Speaking AI Question:', spokenText.slice(0, 60))
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this._initializeVoiceTransport()
+    }
+
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this._sendGatewayMessage({
+        type: force ? 'repeat_question' : 'speak_question',
+        text: spokenText,
+        force,
+      })
+      return
+    }
+
+    this.speakDirectSpeech(spokenText)
+  }
+
+  /**
+   * Speak arbitrary text prompt
+   */
+  speakText(text) {
+    if (!text || this.isStopped) return
+    this.speakAiQuestion(text)
+  }
+
+  /**
+   * Speak direct text aloud using browser SpeechSynthesis with maximum clarity and 0ms latency.
+   * Auto-mutes microphone hardware during speech to prevent audio feedback.
+   */
+  speakDirectSpeech(text, { onEnd, rate = 1.0, pitch = 1.0, volume = 1.0 } = {}) {
+    if (!text || this.isStopped) return Promise.resolve()
+
+    console.log('[VoiceEngine] speakDirectSpeech aloud:', text)
+
+    return new Promise((resolve) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        console.warn('[VoiceEngine] SpeechSynthesis not available in this environment, queuing spoken text')
+        this._queueSpokenText(text)
+        resolve()
+        return
+      }
+
+      try {
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume()
+        }
+        window.speechSynthesis.cancel()
+
+        const utterance = new SpeechSynthesisUtterance(text)
+        utterance.volume = Math.max(0.1, Math.min(1.0, volume))
+        utterance.rate = rate
+        utterance.pitch = pitch
+        utterance.lang = this.language || 'en-US'
+
+        const voice = this._getPreferredSpeechVoice()
+        if (voice) {
+          utterance.voice = voice
+        }
+
+        // Echo protection: Mute microphone hardware while AI speaks aloud
+        this.isAutoMutedWhileSpeaking = true
+        this._muteMicrophoneHardware(true)
+        this.isPlaying = true
+        this.audioState = 'AI_SPEAKING'
+        this._updateState('SPEAKING')
+
+        let completed = false
+        const finalize = () => {
+          if (completed) return
+          completed = true
+          this.isPlaying = false
+          this.audioState = 'IDLE'
+          this.isAutoMutedWhileSpeaking = false
+          this._muteMicrophoneHardware(false)
+          this._concludeAiSpeakingTurn()
+          if (onEnd) onEnd()
+          resolve()
+        }
+
+        utterance.onend = () => {
+          finalize()
+        }
+
+        utterance.onerror = (err) => {
+          console.warn('[VoiceEngine] SpeechSynthesis utterance error:', err)
+          finalize()
+        }
+
+        // Safety watchdog: ensure speech turn never hangs if onend fails to fire in browser
+        const wordCount = text.trim().split(/\s+/).length
+        const estimatedDurationMs = Math.max(2500, Math.ceil((wordCount / 2.5) * 1000) + 1200)
+        setTimeout(() => {
+          finalize()
+        }, estimatedDurationMs)
+
+        window.speechSynthesis.speak(utterance)
+
+        // Store reference to utterance to prevent Chrome garbage-collection bug
+        this._currentDirectUtterance = utterance
+      } catch (err) {
+        console.warn('[VoiceEngine] speakDirectSpeech failed:', err)
+        resolve()
+      }
+    })
+  }
+
+  /**
+   * Spoken filler nudges when candidate remains silent
+   * Requirements:
+   * Level 1 (after 10s silence): "I am here, you can just answer it. You can answer it in your own way."
+   * Level 2 (after 5s silence): "Whenever you're ready, feel free to answer, or we can move forward."
+   */
+  triggerSilenceNudge(level = 1) {
+    if (this.isStopped) return ''
+    const nudge1Phrases = [
+      "I am here, you can just answer it. You can answer it in your own way.",
+      "Take your time, I am here. You can just answer it in your own way.",
+      "I'm here, feel free to answer however you are most comfortable."
+    ]
+    const nudge2Phrases = [
+      "Whenever you're ready, feel free to answer, or we can move forward.",
+      "I am still here. Feel free to answer in your own words, or we can move to the next question.",
+      "Just checking in—take your time, or we can move forward whenever you're ready."
+    ]
+    const chosen = level === 1
+      ? nudge1Phrases[Math.floor(Math.random() * nudge1Phrases.length)]
+      : nudge2Phrases[Math.floor(Math.random() * nudge2Phrases.length)]
+
+    console.log(`[VoiceEngine] Speaking audible silence nudge #${level} ALOUD:`, chosen)
+    this.speakDirectSpeech(chosen)
+    return chosen
   }
 
   /**
@@ -814,26 +970,6 @@ export class VoiceInterviewEngine {
     }
   }
 
-  /**
-   * Speak newly generated real-time AI question and options aloud
-   */
-  speakAiQuestion(spokenText, force = false) {
-    if (!spokenText || this.isStopped) return
-
-    // 1. If WebSocket is connected, request Voice Gateway to deliver the prompt
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this._sendGatewayMessage(
-        {
-          type: force ? 'repeat_question' : 'speak_question',
-          text: spokenText,
-          force,
-        }
-      )
-      return
-    }
-
-    this.onError('The voice connection is unavailable. Reconnect before playing the interview question.')
-  }
 
   /**
    * Selects the most natural, human-like voice available in the browser for fallback turns
@@ -1197,18 +1333,6 @@ export class VoiceInterviewEngine {
     )
   }
 
-  /**
-   * Request AI evaluator silence nudge
-   */
-  triggerSilenceNudge(nudgeIndex = 1) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
-    this._sendGatewayMessage(
-      {
-        type: 'trigger_nudge',
-        nudgeIndex,
-      }
-    )
-  }
 
   /**
    * Request skip to next JD question after 2 silence nudges

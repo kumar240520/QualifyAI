@@ -75,7 +75,38 @@ export const proctoringService = {
       flushInFlight = (async () => {
         const result = await proctoringService.recordEvents(interviewId, token, batch)
         if (!result) {
-          buffer.unshift(...batch)
+          // Client-side fallback: ensure warning counts progress even if API is slow or offline
+          for (const item of batch) {
+            if (item.is_warning) {
+              warningsCount = Math.min(maxWarnings, warningsCount + 1)
+              const violationRecord = {
+                id: item.event_id || `warn-${Date.now()}-${warningsCount}`,
+                warningNumber: warningsCount,
+                maxWarnings,
+                type: item.event_type,
+                reason: item.metadata?.reason || `Security check: ${item.event_type}`,
+                severity: item.severity,
+                timestamp: new Date().toISOString(),
+                metadata: item.metadata || {},
+              }
+              warningsHistory.push(violationRecord)
+              onWarning?.({
+                count: warningsCount,
+                maxWarnings,
+                violation: violationRecord,
+                message: `Warning ${warningsCount} of ${maxWarnings}: ${violationRecord.reason}`,
+              })
+              if (warningsCount >= maxWarnings && !isTerminated) {
+                isTerminated = true
+                onTerminate?.({
+                  reason: `Maximum warning threshold reached (${warningsCount}/${maxWarnings}).`,
+                  count: warningsCount,
+                  maxWarnings,
+                  history: [...warningsHistory],
+                })
+              }
+            }
+          }
           return null
         }
         if (Number.isFinite(Number(result.warningCount))) warningsCount = Number(result.warningCount)

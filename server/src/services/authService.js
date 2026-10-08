@@ -1,4 +1,4 @@
-import { supabase, createUserScopedClient } from '../integrations/supabaseClient.js'
+import { supabase, createUserScopedClient, getServiceSupabaseClient } from '../integrations/supabaseClient.js'
 import { config } from '../config/env.js'
 
 /**
@@ -150,12 +150,12 @@ class AuthService {
    * Retrieve user profile and associated organization from PostgreSQL.
    */
   async getUserProfileAndOrg(userId, accessToken) {
-    const client = accessToken ? createUserScopedClient(accessToken) : supabase
+    const client = accessToken ? createUserScopedClient(accessToken) : getServiceSupabaseClient()
 
     // 1. Fetch Profile
     const { data: profile } = await client
       .from('profiles')
-      .select('id, email, full_name, role, created_at, phone, location, recruiter_role, onboarding_completed, onboarding_data')
+      .select('id, email, full_name, role, created_at, phone, location, recruiter_role, onboarding_completed, is_submitted, onboarding_data')
       .eq('id', userId)
       .maybeSingle()
 
@@ -171,6 +171,8 @@ class AuthService {
 
     return {
       profile: profile || null,
+      isSubmitted: Boolean(profile?.is_submitted || profile?.onboarding_completed),
+      onboardingCompleted: Boolean(profile?.onboarding_completed || profile?.is_submitted),
       organization: org
         ? {
             id: org.id,
@@ -190,17 +192,25 @@ class AuthService {
   /**
    * Persist recruiter onboarding data to profiles and organizations
    */
-  async updateOnboarding(userId, onboardingData = {}) {
+  async updateOnboarding(userId, onboardingData = {}, userToken = null) {
+    const client = userToken ? createUserScopedClient(userToken) : getServiceSupabaseClient()
+
     // 1. Update Profile
-    const { data: updatedProfile, error: profErr } = await supabase
+    const profileUpdates = {
+      phone: onboardingData.phone || null,
+      location: onboardingData.location || null,
+      recruiter_role: onboardingData.recruiterRole || null,
+      onboarding_completed: true,
+      is_submitted: true,
+      onboarding_data: onboardingData,
+    }
+    if (onboardingData.fullName) {
+      profileUpdates.full_name = onboardingData.fullName
+    }
+
+    const { data: updatedProfile, error: profErr } = await client
       .from('profiles')
-      .update({
-        phone: onboardingData.phone || null,
-        location: onboardingData.location || null,
-        recruiter_role: onboardingData.recruiterRole || null,
-        onboarding_completed: true,
-        onboarding_data: onboardingData,
-      })
+      .update(profileUpdates)
       .eq('id', userId)
       .select()
       .maybeSingle()
@@ -211,7 +221,7 @@ class AuthService {
     }
 
     // 2. Update Organization if companyName or org fields provided
-    const { data: membership } = await supabase
+    const { data: membership } = await client
       .from('organization_memberships')
       .select('organization_id')
       .eq('user_id', userId)
@@ -232,7 +242,7 @@ class AuthService {
         },
       }
 
-      const { error: orgErr } = await supabase
+      const { error: orgErr } = await client
         .from('organizations')
         .update(orgUpdates)
         .eq('id', membership.organization_id)
@@ -244,6 +254,7 @@ class AuthService {
 
     return {
       profile: updatedProfile,
+      isSubmitted: true,
       onboardingCompleted: true,
     }
   }

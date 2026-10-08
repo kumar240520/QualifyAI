@@ -55,10 +55,14 @@ export function AuthProvider({ children }) {
       const activeMembership = memberships?.[0]
       const org = activeMembership?.organizations
 
-      const isOnboarded =
+      const isSubmitted =
+        Boolean(profile?.is_submitted) ||
         Boolean(profile?.onboarding_completed) ||
+        Boolean(authUser.user_metadata?.is_submitted) ||
         Boolean(authUser.user_metadata?.onboarding_completed) ||
         localStorage.getItem(`qualifyai_onboarding_${authUser.id}`) === 'true'
+
+      const isOnboarded = isSubmitted
 
       const fullUser = {
         id: authUser.id,
@@ -71,6 +75,7 @@ export function AuthProvider({ children }) {
         organizationId: org?.id || 'org_default',
         organizationName: org?.name || `${authUser.user_metadata?.full_name || 'My'}'s Organization`,
         token: activeSession.access_token,
+        isSubmitted: Boolean(isSubmitted),
         onboardingCompleted: Boolean(isOnboarded),
       }
 
@@ -96,9 +101,11 @@ export function AuthProvider({ children }) {
       }
     } catch (err) {
       console.warn('[AuthProvider] Hydration error, using session metadata:', err.message)
-      const isOnboarded =
+      const isSubmitted =
+        Boolean(authUser.user_metadata?.is_submitted) ||
         Boolean(authUser.user_metadata?.onboarding_completed) ||
         localStorage.getItem(`qualifyai_onboarding_${authUser.id}`) === 'true'
+      const isOnboarded = isSubmitted
 
       const fallbackUser = {
         id: authUser.id,
@@ -108,6 +115,7 @@ export function AuthProvider({ children }) {
         organizationId: 'org_default',
         organizationName: 'Primary Workspace',
         token: activeSession.access_token,
+        isSubmitted: Boolean(isSubmitted),
         onboardingCompleted: Boolean(isOnboarded),
       }
       setUser(fallbackUser)
@@ -276,6 +284,7 @@ export function AuthProvider({ children }) {
     if (!user) return false
     const updatedUser = {
       ...user,
+      isSubmitted: true,
       onboardingCompleted: true,
       organizationName: onboardingData.companyName || user.organizationName,
       onboardingData,
@@ -291,6 +300,7 @@ export function AuthProvider({ children }) {
       await supabase.auth.updateUser({
         data: {
           onboarding_completed: true,
+          is_submitted: true,
           onboarding_data: onboardingData,
         },
       })
@@ -310,15 +320,21 @@ export function AuthProvider({ children }) {
 
       // 3. Update Supabase profiles table directly as well
       if (user.id && user.id !== 'usr_admin_demo') {
+        const profileUpdates = {
+          onboarding_completed: true,
+          is_submitted: true,
+          phone: onboardingData.phone || null,
+          location: onboardingData.location || null,
+          recruiter_role: onboardingData.recruiterRole || null,
+          onboarding_data: onboardingData,
+        }
+        if (onboardingData.fullName) {
+          profileUpdates.full_name = onboardingData.fullName
+        }
+
         await supabase
           .from('profiles')
-          .update({
-            onboarding_completed: true,
-            phone: onboardingData.phone || null,
-            location: onboardingData.location || null,
-            recruiter_role: onboardingData.recruiterRole || null,
-            onboarding_data: onboardingData,
-          })
+          .update(profileUpdates)
           .eq('id', user.id)
       }
     } catch (e) {

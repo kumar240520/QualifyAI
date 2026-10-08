@@ -53,9 +53,9 @@ export class VisualProctoringService {
       baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
       runningMode: 'VIDEO',
       numFaces: 3,
-      minFaceDetectionConfidence: 0.65,
-      minFacePresenceConfidence: 0.65,
-      minTrackingConfidence: 0.65,
+      minFaceDetectionConfidence: 0.45,
+      minFacePresenceConfidence: 0.45,
+      minTrackingConfidence: 0.45,
     })
     this.running = true
     this.onStatus({ cameraReady: true, facePresent: false, message: 'Camera ready. Position your face in the frame.' })
@@ -93,11 +93,11 @@ export class VisualProctoringService {
       if (facePresent) this.cameraLostSince = null
       this.onStatus({ cameraReady: Boolean(this.stream?.getVideoTracks().some((track) => track.readyState === 'live')), facePresent, faceCount: faces.length })
 
-      this._updateEpisode('FACE_ABSENT', !facePresent, now, 3000, 0.9, 'No face was visible in the camera for several seconds.')
+      this._updateEpisode('FACE_ABSENT', !facePresent, now, 2500, 0.9, 'No face was visible in the camera for several seconds.')
       this._updateEpisode('MULTIPLE_FACES', faces.length > 1, now, 1400, 0.85, 'More than one face was visible in the camera.')
       const yaw = faces.length === 1 ? faceYawRatio(faces[0]) : null
       const lookingAway = yaw != null && (yaw < 0.20 || yaw > 0.80)
-      this._updateEpisode('FACE_ORIENTATION', lookingAway, now, 3000, 0.75, 'Your face was turned away from the screen for several seconds.', { yawRatio: yaw })
+      this._updateEpisode('FACE_ORIENTATION', lookingAway, now, 2800, 0.75, 'Your face was turned away from the screen for several seconds.', { yawRatio: yaw })
       this._updateEpisode('CAMERA_LOST', Boolean(this.cameraLostSince && now - this.cameraLostSince >= 2500), now, 1, 1, 'The camera connection was lost.')
     } catch (error) {
       // A vision/model runtime error degrades visual checks but never interrupts voice or ends the interview.
@@ -117,7 +117,7 @@ export class VisualProctoringService {
     this.pendingSince.set(type, start)
     const durationMs = now - start
     if (durationMs < thresholdMs || this.reported.has(type)) return
-    if (now - (this.lastReportedAt.get(type) || 0) < 15_000) return
+    if (now - (this.lastReportedAt.get(type) || 0) < 6_000) return
     this.reported.add(type)
     this.lastReportedAt.set(type, now)
     this.onEvent({

@@ -150,8 +150,9 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
         setSuccessMessage('Login successful! Redirecting to workspace...')
         setTimeout(() => {
           onAuthSuccess?.(res.user)
+          const isOnboarded = Boolean(res.user?.isSubmitted || res.user?.onboardingCompleted)
           // If recruiter has not completed onboarding, send to /onboarding
-          if (res.user?.role !== 'CANDIDATE' && !res.user?.onboardingCompleted) {
+          if (res.user?.role !== 'CANDIDATE' && !isOnboarded) {
             navigate('/onboarding', { replace: true })
           } else {
             navigate(redirectTarget, { replace: true })

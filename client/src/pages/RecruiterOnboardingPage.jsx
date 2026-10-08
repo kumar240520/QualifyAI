@@ -67,12 +67,12 @@ export default function RecruiterOnboardingPage() {
   const { user, completeOnboarding } = useAuth()
   const navigate = useNavigate()
 
-  // Redirect if already onboarded
+  // Redirect if already submitted or onboarded
   useEffect(() => {
-    if (user?.onboardingCompleted) {
+    if (user?.isSubmitted || user?.onboardingCompleted) {
       navigate('/dashboard', { replace: true })
     }
-  }, [user?.onboardingCompleted, navigate])
+  }, [user?.isSubmitted, user?.onboardingCompleted, navigate])
 
   const [currentStep, setCurrentStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)

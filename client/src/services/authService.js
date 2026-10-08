@@ -116,6 +116,15 @@ export const authService = {
         console.warn('[authService.login] Could not reach /api/auth/me:', profileErr.message)
       }
 
+      const isSubmitted = Boolean(
+        profileData?.isSubmitted ||
+        profileData?.profile?.is_submitted ||
+        profileData?.onboardingCompleted ||
+        profileData?.profile?.onboarding_completed ||
+        authUser.user_metadata?.is_submitted ||
+        authUser.user_metadata?.onboarding_completed
+      )
+
       const user = {
         id: authUser.id,
         email: authUser.email,
@@ -130,6 +139,8 @@ export const authService = {
         },
         profile: profileData?.profile || null,
         token: session.access_token,
+        isSubmitted,
+        onboardingCompleted: isSubmitted,
       }
 
       return {

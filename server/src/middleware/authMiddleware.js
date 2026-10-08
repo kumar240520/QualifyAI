@@ -32,7 +32,7 @@ export async function requireAuth(req, res, next) {
     // Retrieve profile from public.profiles
     const { data: profile, error: profileError } = await userClient
       .from('profiles')
-      .select('id, email, full_name, role, created_at, updated_at')
+      .select('id, email, full_name, role, is_submitted, onboarding_completed, created_at, updated_at')
       .eq('id', authUser.id)
       .maybeSingle()
 
@@ -48,6 +48,8 @@ export async function requireAuth(req, res, next) {
       email: authUser.email,
       fullName: profile?.full_name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0],
       role: profile?.role || authUser.user_metadata?.role || 'ORG_ADMIN',
+      isSubmitted: Boolean(profile?.is_submitted || profile?.onboarding_completed),
+      onboardingCompleted: Boolean(profile?.onboarding_completed || profile?.is_submitted),
       profile: profile || null,
       metadata: authUser.user_metadata || {},
     }

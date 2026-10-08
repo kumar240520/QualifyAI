@@ -127,6 +127,8 @@ export const authController = {
           email: user.email,
           fullName: userDetails?.profile?.full_name || user.fullName,
           role: userDetails?.profile?.role || user.role,
+          isSubmitted: userDetails?.isSubmitted ?? user.isSubmitted ?? false,
+          onboardingCompleted: userDetails?.onboardingCompleted ?? user.onboardingCompleted ?? false,
           organization: userDetails?.organization || null,
           profile: userDetails?.profile || null,
         },
@@ -144,7 +146,8 @@ export const authController = {
       const user = req.user
       const validated = assertValid(validateOnboardingPayload(req.body))
 
-      const result = await authService.updateOnboarding(user.id, validated)
+      const token = req.token || (req.headers.authorization && req.headers.authorization.split(' ')[1])
+      const result = await authService.updateOnboarding(user.id, validated, token)
 
       return res.status(200).json({
         success: true,

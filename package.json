@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "workspaces": [
+    "client",
+    "server"
+  ],
   "scripts": {
     "dev": "concurrently -k -n \"SERVER,CLIENT\" -c \"cyan.bold,magenta.bold\" \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
     "start": "concurrently -k -n \"SERVER,CLIENT\" -c \"cyan.bold,magenta.bold\" \"npm --prefix server start\" \"npm --prefix client run dev\"",

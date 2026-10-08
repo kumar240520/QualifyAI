@@ -11,6 +11,7 @@ import modelEvaluationRoutes from './routes/modelEvaluationRoutes.js'
 import geminiRoutes from './routes/geminiRoutes.js'
 import voiceRoutes from './routes/voiceRoutes.js'
 import { errorHandler } from './middleware/errorHandler.js'
+import { supabase } from './integrations/supabaseClient.js'
 
 const app = express()
 const configuredOrigins = new Set(
@@ -67,6 +68,12 @@ app.get('/api', (_req, res) => res.status(200).json({
 }))
 
 app.use((req, _res, next) => {
+  if (req.url && req.url.startsWith('/api/index.js')) {
+    const original = req.headers['x-forwarded-uri'] || req.headers['x-matched-path']
+    if (original) {
+      req.url = original
+    }
+  }
   if (req.url && req.url.includes('//')) {
     req.url = req.url.replace(/\/+/g, '/')
   }
@@ -74,13 +81,44 @@ app.use((req, _res, next) => {
 })
 
 app.get(['/api/health', '/health'], (_req, res) => res.status(200).json({
-  status: 'healthy',
+  status: 'ok',
+  healthy: true,
   timestamp: new Date().toISOString(),
   version: '1.2.0',
   environment: config.nodeEnv,
   supabaseConfigured: Boolean(config.supabase.url && config.supabase.anonKey),
   geminiConfigured: Boolean(config.gemini.apiKey),
 }))
+
+app.get(['/api/health/database', '/health/database'], async (_req, res) => {
+  const started = Date.now()
+  try {
+    const { error } = await supabase.from('profiles').select('id').limit(1)
+    if (error && error.code !== 'PGRST116') {
+      return res.status(503).json({
+        status: 'error',
+        connected: false,
+        latencyMs: Date.now() - started,
+        error: error.message || 'Database query failed',
+        timestamp: new Date().toISOString(),
+      })
+    }
+    return res.status(200).json({
+      status: 'ok',
+      connected: true,
+      latencyMs: Date.now() - started,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (err) {
+    return res.status(503).json({
+      status: 'error',
+      connected: false,
+      latencyMs: Date.now() - started,
+      error: err.message || 'Database connection error',
+      timestamp: new Date().toISOString(),
+    })
+  }
+})
 
 app.use(['/api/auth', '/auth'], authRoutes)
 app.use(['/api/ai', '/ai'], aiRoutes)

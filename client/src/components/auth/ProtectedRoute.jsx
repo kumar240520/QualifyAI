@@ -37,10 +37,11 @@ export default function ProtectedRoute({ children, requiredRoles = [] }) {
   }
 
   // 3. Unskippable Onboarding Guard: Recruiter must complete onboarding before dashboard access
+  const isCompleted = Boolean(user?.isSubmitted || user?.onboardingCompleted)
   if (
     user &&
     user.role !== 'CANDIDATE' &&
-    !user.onboardingCompleted &&
+    !isCompleted &&
     location.pathname !== '/onboarding'
   ) {
     return <Navigate to="/onboarding" replace />

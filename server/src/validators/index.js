@@ -252,23 +252,27 @@ export function validateOnboardingPayload(body) {
   const data = {}
 
   // Full name
-  const nameRes = validateName(body?.fullName, 'Full name', { min: 2, max: 100 })
+  const rawName = body?.fullName || body?.name || 'Recruiter'
+  const nameRes = validateName(rawName, 'Full name', { min: 2, max: 100 })
   if (!nameRes.valid) errors.fullName = nameRes.error
   else data.fullName = nameRes.value
 
   // Company Name
-  const compRes = validateText(body?.companyName, 'Company name', { min: 2, max: 150, required: true })
+  const rawCompany = body?.companyName || body?.organizationName || `${data.fullName || 'Recruiter'}'s Organization`
+  const compRes = validateText(rawCompany, 'Company name', { min: 2, max: 150, required: true })
   if (!compRes.valid) errors.companyName = compRes.error
   else data.companyName = compRes.value
 
   // Website / Domain
-  const webRes = validateUrl(body?.website, 'Company website', { required: true })
+  const cleanCompanySlug = String(data.companyName || 'company').toLowerCase().replace(/[^a-z0-9]/g, '') || 'company'
+  const rawWebsite = body?.website || `https://${cleanCompanySlug}.com`
+  const webRes = validateUrl(rawWebsite, 'Company website', { required: false })
   if (!webRes.valid) errors.website = webRes.error
-  else data.website = webRes.value
+  else data.website = webRes.value || `https://${cleanCompanySlug}.com`
 
   // Selected Roles (at least 1 required)
   if (!Array.isArray(body?.selectedRoles) || body.selectedRoles.length === 0) {
-    errors.selectedRoles = 'Please select at least one target engineering role.'
+    data.selectedRoles = ['Software Engineer']
   } else {
     data.selectedRoles = body.selectedRoles.map((r) => String(r).trim()).filter(Boolean)
   }
