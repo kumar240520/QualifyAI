@@ -47,10 +47,10 @@ export const createRealtimeQuestionGenerator = (ai = aiOrchestrator) => ({
     }))
     const resumeContext = candidate?.resume_text || candidate?.resume || null
     const compactResume = resumeContext
-      ? (typeof resumeContext === 'string' ? resumeContext : JSON.stringify(resumeContext)).slice(0, 6000)
+      ? (typeof resumeContext === 'string' ? resumeContext : JSON.stringify(resumeContext)).slice(0, 1800)
       : null
     const jobRequirements = job?.job_requirements
-      ? (typeof job.job_requirements === 'string' ? job.job_requirements : JSON.stringify(job.job_requirements)).slice(0, 4000)
+      ? (typeof job.job_requirements === 'string' ? job.job_requirements : JSON.stringify(job.job_requirements)).slice(0, 1200)
       : null
 
     const prompt = `You are the autonomous senior technical interviewer for ${candidate?.full_name || 'the candidate'} applying for ${job?.title || 'this role'}.
@@ -99,7 +99,7 @@ ACTIVE LISTENING & GROUNDED FOLLOW-UP PROTOCOL (MANDATORY):
 3. Keep the spoken response natural, warm, professional, and concise (under 3 sentences total). Never speak monologues or markdown tags.
 
 ROLE CONTEXT:
-${JSON.stringify({ title: job?.title, description: String(job?.description || '').slice(0, 5000), seniority: job?.seniority, department: job?.department, requirements: jobRequirements, resume: compactResume })}
+${JSON.stringify({ title: job?.title, description: String(job?.description || '').slice(0, 1200), seniority: job?.seniority, department: job?.department, requirements: jobRequirements, resume: compactResume })}
 
 RUBRIC CRITERIA (evaluation goals, not questions):
 ${JSON.stringify(rubricCriteria.map(({ id, name, description, weight, expected_competency }) => ({ id, name, description, weight, expected_competency })))}
@@ -159,6 +159,7 @@ Return one structured decision. For a question, choose a type appropriate to the
     const result = await ai.generateStructured({
       prompt,
       schema,
+      model: 'gemini-3.5-flash-lite',
       systemInstruction: 'You are the sole interviewer. Make one contextual decision based on the complete committed conversation. Return only the requested structured JSON. Never generate multiple questions or follow a fixed question list.',
     })
     const decision = result?.data

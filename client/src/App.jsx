@@ -27,6 +27,7 @@ import DatasetManagementView from './components/datasets/DatasetManagementView.j
 import ModelEvaluationBenchmarkView from './components/benchmarks/ModelEvaluationBenchmarkView.jsx'
 import RecruiterOnboardingPage from './pages/RecruiterOnboardingPage.jsx'
 import AudioDiagnosticsPage from './pages/AudioDiagnosticsPage.jsx'
+import ErrorBoundary from './components/common/ErrorBoundary.jsx'
 
 // Candidate Pipeline Screened List
 const SAMPLE_CANDIDATES = [
@@ -326,14 +327,16 @@ function AppRoutes() {
 
 /**
  * Root Application Entrypoint
- * Wraps entire application in BrowserRouter and AuthProvider
+ * Wraps entire application in ErrorBoundary, BrowserRouter, and AuthProvider
  */
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   )
 }

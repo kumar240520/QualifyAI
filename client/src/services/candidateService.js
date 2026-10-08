@@ -26,6 +26,24 @@ async function getAuthHeaders() {
   }
 }
 
+function parseServiceError(data, res, fallbackMessage) {
+  const errObj = data?.error
+  const message =
+    typeof errObj === 'string'
+      ? errObj
+      : errObj?.message || fallbackMessage || `Request failed (${res?.status || 500})`
+  const error = new Error(message)
+  if (errObj && typeof errObj === 'object') {
+    error.code = errObj.code
+    error.field = errObj.field
+    error.fields = errObj.fields || (errObj.field ? { [errObj.field]: message } : {})
+    error.requestId = errObj.requestId
+  }
+  error.status = res?.status
+  error.data = data
+  return error
+}
+
 export const candidateService = {
   /**
    * Fetch candidates and their application/invitation status for a job
@@ -38,7 +56,7 @@ export const candidateService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to fetch candidate cohort.')
+      throw parseServiceError(data, res, 'Failed to fetch candidate cohort.')
     }
     return data.data || []
   },
@@ -55,7 +73,7 @@ export const candidateService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to register candidate.')
+      throw parseServiceError(data, res, 'Failed to register candidate.')
     }
     return data.data
   },
@@ -72,7 +90,7 @@ export const candidateService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to generate invitation link.')
+      throw parseServiceError(data, res, 'Failed to generate invitation link.')
     }
     return data.data
   },
@@ -87,7 +105,7 @@ export const candidateService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Invalid or expired invitation token.')
+      throw parseServiceError(data, res, 'Invalid or expired invitation token.')
     }
     return data.data
   },
@@ -103,7 +121,7 @@ export const candidateService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to accept invitation.')
+      throw parseServiceError(data, res, 'Failed to accept invitation.')
     }
     return data.data
   },

@@ -35,7 +35,20 @@ export class VoiceInterviewEngine {
     return engine
   }
 
-  constructor({ token, language = 'en-IN', onStateChange, onTranscript, onAiQuestion, onInterviewCompleted, onCandidateSpeech, onAudioLevel, onAiSpeakingConcluded, onError }) {
+  constructor({
+    token,
+    language = 'en-IN',
+    onStateChange,
+    onTranscript,
+    onAiQuestion,
+    onInterviewCompleted,
+    onCandidateSpeech,
+    onAudioLevel,
+    onAiSpeakingConcluded,
+    onAiSpeechProgress,
+    onAiAudioStarted,
+    onError,
+  }) {
     this.token = token
     this.language = language || (navigator.language && navigator.language.startsWith('en') ? navigator.language : 'en-IN')
     this.onStateChange = onStateChange || (() => {})
@@ -45,9 +58,15 @@ export class VoiceInterviewEngine {
     this.onCandidateSpeech = onCandidateSpeech || (() => {})
     this.onAudioLevel = onAudioLevel || (() => {})
     this.onAiSpeakingConcluded = onAiSpeakingConcluded || (() => {})
+    this.onAiSpeechProgress = onAiSpeechProgress || (() => {})
+    this.onAiAudioStarted = onAiAudioStarted || (() => {})
     this.onError = onError || (() => {})
 
     this.ws = null
+    this.ttsAbortController = null
+    this.spokenTextQueue = []
+    this.isDrainingSpokenTextQueue = false
+    this.playbackWaiters = new Map()
     this.inputAudioContext = null
     this.outputAudioContext = null
     this.mediaStream = null
@@ -62,6 +81,7 @@ export class VoiceInterviewEngine {
     this.audioPlaybackFailed = false
     this.isAiTurnActive = false // Strictly true while Gemini Live audio turn is being generated/streamed
     this.turnCompletionTimer = null
+    this.isRecognizing = false // Tracks active SpeechRecognition session lifecycle
 
     this.preventAiInterruption = true // Default ON: Protect AI speech from background noise/speaker echo
     this.isMuted = false
@@ -85,10 +105,16 @@ export class VoiceInterviewEngine {
         this._muteMicrophoneHardware(true)
         this._updateState('SPEAKING')
       },
+      onPlaybackProgress: (progressData) => {
+        if (this.onAiSpeechProgress) {
+          this.onAiSpeechProgress(progressData)
+        }
+      },
       onPlaybackComplete: (report) => {
         if (this.ws?.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ type: 'ai_audio_playback_complete', audioTurnId: report.turnId, stats: report.stats }))
+          this._sendGatewayMessage({ type: 'ai_audio_playback_complete', audioTurnId: report.turnId, stats: report.stats })
         }
+        this._resolvePlaybackWaiter(report.turnId)
         this._concludeAiSpeakingTurn()
       },
       onError: (error) => {
@@ -112,92 +138,225 @@ export class VoiceInterviewEngine {
   }
 
   /**
-   * Pre-connect to backend Voice WebSocket gateway during countdown.
-   * Establishes WebSocket + waits for Gemini Live 'session_ready' from server.
+   * Prepare audio playback and check the server API during the onboarding countdown.
    * Returns a Promise that resolves to { success: true } or { success: false, error: string }.
    * Does NOT play any audio or start the interview conversation — strictly silent readiness check!
    */
   async preconnect(timeoutMs = 12000) {
-    return new Promise((resolve) => {
-      try {
-        this._updateState('CONNECTING')
+    this._updateState('CONNECTING')
+    try {
+      const health = await Promise.race([
+        fetch(`${import.meta.env.VITE_API_URL || '/api'}/health`),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Voice service check timed out after ${timeoutMs}ms.`)), timeoutMs)),
+      ])
+      if (!health.ok) throw new Error('Voice service is unavailable.')
+      await this._ensureOutputAudioContext()
+      this._initializeVoiceTransport()
+      this.isPreconnected = true
+      this.isConnected = true
+      this._updateState('LISTENING')
+      return { success: true }
+    } catch (err) {
+      console.error('[VoiceEngine] Preconnect failed:', err)
+      return { success: false, error: err.message || 'Unable to connect to Gemini Live.' }
+    }
+  }
 
-        // Connect to WebSocket Gateway
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        const host = window.location.hostname === 'localhost' ? 'localhost:5000' : window.location.host
-        const wsUrl = `${protocol}//${host}/ws/voice-interview?token=${encodeURIComponent(this.token)}`
-
-        this.ws = new WebSocket(wsUrl)
-
-        let settled = false
-        const timeoutId = setTimeout(() => {
-          if (!settled) {
-            settled = true
-            console.error('[VoiceEngine] Preconnect timed out after', timeoutMs, 'ms')
-            resolve({ success: false, error: 'Connection to AI evaluator timed out. Please try again later.' })
-          }
-        }, timeoutMs)
-
-        this.ws.onopen = () => {
-          this.isConnected = true
-          // Don't set up mic pipeline yet — wait for session_ready from server (Gemini Live connected)
+  _initializeVoiceTransport() {
+    this.ws = {
+      readyState: WebSocket.OPEN,
+      send: (payload) => {
+        const message = JSON.parse(payload)
+        if (message.clientContent) {
+          const text = message.clientContent.turns?.flatMap((turn) => turn.parts || []).map((part) => part.text || '').join(' ')
+          this._sendLiveText(text)
         }
+      },
+      close: () => {
+        this.ws.readyState = WebSocket.CLOSED
+      },
+    }
+  }
 
-        this.ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data)
-
-            if (msg.type === 'session_ready') {
-              // Gemini Live is fully connected and ready in background!
-              this.isPreconnected = true
-              if (!settled) {
-                settled = true
-                clearTimeout(timeoutId)
-                resolve({ success: true })
-              }
-            } else if (msg.type === 'error') {
-              if (!settled) {
-                settled = true
-                clearTimeout(timeoutId)
-                resolve({ success: false, error: msg.message || 'Voice session initialization failed.' })
-              }
-            }
-            // CRITICAL: During preconnect countdown, DO NOT process audio chunks or turns!
-          } catch (err) {
-            console.error('[VoiceEngine] Preconnect message parse error:', err)
-          }
-        }
-
-        this.ws.onerror = (err) => {
-          console.error('[VoiceEngine] WebSocket error during preconnect:', err)
-          if (!settled) {
-            settled = true
-            clearTimeout(timeoutId)
-            resolve({ success: false, error: 'Failed to connect to voice server. Please check your connection and try again.' })
-          }
-        }
-
-        this.ws.onclose = (e) => {
-          this.isConnected = false
-          if (!settled) {
-            settled = true
-            clearTimeout(timeoutId)
-            resolve({ success: false, error: 'Voice connection closed unexpectedly. Please try again later.' })
-          }
-          this._updateState('DISCONNECTED')
-        }
-      } catch (err) {
-        console.error('[VoiceEngine] Preconnect initialization failed:', err)
-        resolve({ success: false, error: err.message || 'Voice engine initialization failed.' })
+  async _synthesizeSpokenText(text) {
+    if (!text || this.isStopped) return
+    const controller = new AbortController()
+    this.ttsAbortController = controller
+    const audioTurnId = `cosy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    let resolvePlayback
+    const playbackFinished = new Promise((resolve) => { resolvePlayback = resolve })
+    this.playbackWaiters.set(audioTurnId, resolvePlayback)
+    this._handleServerMessage({ data: JSON.stringify({ type: 'ai_audio_started', audioTurnId }) })
+    let buffer = ''
+    let receivedChunks = 0
+    let playbackTimeout = null
+    const consumeLine = (line) => {
+      if (!line.trim()) return
+      const event = JSON.parse(line)
+      if (event.type === 'audio_chunk') {
+        receivedChunks++
+        this._handleServerMessage({ data: JSON.stringify({
+          type: 'ai_audio_chunk', audioTurnId,
+          data: event.data, mimeType: event.mimeType, sampleRate: event.sampleRate,
+          channels: event.channels, bitDepth: event.bitDepth, byteOrder: event.byteOrder,
+          audioSequence: event.chunkIndex, chunkIndex: event.chunkIndex,
+        }) })
+      } else if (event.type === 'complete') {
+        if (!receivedChunks) throw new Error('CosyVoice returned no playable audio.')
+        this._handleServerMessage({ data: JSON.stringify({
+          type: 'ai_transcript_complete', audioTurnId, fullTranscript: event.text || text,
+        }) })
+        this._handleServerMessage({ data: JSON.stringify({
+          type: 'ai_audio_stream_complete', audioTurnId, fullTranscript: event.text || text,
+          providerUsed: event.provider,
+        }) })
+      } else if (event.type === 'error') {
+        throw new Error(event.error || 'CosyVoice could not speak this prompt.')
       }
-    })
+    }
+
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/voice/synthesize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+        body: JSON.stringify({ token: this.token, text }),
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error || `Voice synthesis request failed (${response.status}).`)
+      }
+      if (!response.body) throw new Error('This browser could not receive streamed interviewer audio.')
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      while (true) {
+        const { done, value } = await reader.read()
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) consumeLine(line)
+        if (done) break
+      }
+      if (buffer.trim()) consumeLine(buffer)
+      if (!receivedChunks) throw new Error('CosyVoice returned no playable audio.')
+      await Promise.race([
+        playbackFinished,
+        new Promise((resolve) => {
+          playbackTimeout = setTimeout(() => {
+            console.warn('[VoiceEngine] Audio playback did not complete in time; advancing the interview turn.')
+            this._concludeAiSpeakingTurn()
+            resolve()
+          }, 90000)
+        }),
+      ])
+    } catch (error) {
+      if (error.name === 'AbortError' || this.isStopped) return
+      console.error('[VoiceEngine] CosyVoice synthesis failed:', error)
+      this.onError(error.message || 'Interviewer voice could not be played.')
+      this._handleAiTurnComplete({ audioTurnId, audioUnavailable: true })
+    } finally {
+      if (playbackTimeout) clearTimeout(playbackTimeout)
+      if (this.ttsAbortController === controller) this.ttsAbortController = null
+      this._resolvePlaybackWaiter(audioTurnId)
+    }
+  }
+
+  _resolvePlaybackWaiter(turnId) {
+    const resolve = this.playbackWaiters.get(turnId)
+    if (!resolve) return
+    this.playbackWaiters.delete(turnId)
+    resolve()
+  }
+
+  _queueSpokenText(text) {
+    if (!text || this.isStopped) return
+    this.spokenTextQueue.push(text)
+    if (this.isDrainingSpokenTextQueue) return
+    this.isDrainingSpokenTextQueue = true
+    void (async () => {
+      try {
+        while (this.spokenTextQueue.length && !this.isStopped) {
+          const nextText = this.spokenTextQueue.shift()
+          await this._synthesizeSpokenText(nextText)
+        }
+      } finally {
+        this.isDrainingSpokenTextQueue = false
+        if (this.spokenTextQueue.length && !this.isStopped) this._queueSpokenText(this.spokenTextQueue.shift())
+      }
+    })()
+  }
+
+  _handleGeminiMessage(message) {
+    if (message.setupComplete) {
+      this.isConnected = true
+      if (this.hasEnteredRoom && !this.processorNode) this._setupMicrophonePipeline()
+      if (this.hasEnteredRoom && !this.recognition) this._setupSpeechRecognition()
+      this._updateState('LISTENING')
+      this._handleServerMessage({ data: JSON.stringify({ type: 'session_ready' }) })
+      return
+    }
+    if (message.error) {
+      this.onError(message.error.message || 'Gemini Live returned an error.')
+      return
+    }
+    if (message.sessionResumptionUpdate?.newHandle) {
+      this.resumptionHandle = message.sessionResumptionUpdate.newHandle
+    }
+    const content = message.serverContent
+    if (!content) return
+    if (content.modelTurn?.parts?.length) {
+      if (this.currentLiveTurnId == null) {
+        this.currentLiveTurnId = `live-${Date.now()}`
+        this._handleServerMessage({ data: JSON.stringify({ type: 'ai_audio_started', audioTurnId: this.currentLiveTurnId }) })
+      }
+      for (const part of content.modelTurn.parts) {
+        const audio = part.inlineData || part.inline_data
+        if (audio?.data) {
+          this._handleServerMessage({ data: JSON.stringify({
+            type: 'ai_audio_chunk', audioTurnId: this.currentLiveTurnId,
+            data: audio.data, mimeType: audio.mimeType || audio.mime_type || 'audio/pcm;rate=24000',
+            sampleRate: Number((audio.mimeType || '').match(/rate=(\d+)/)?.[1]) || 24000,
+            channels: 1, bitDepth: 16, byteOrder: 'little-endian',
+          }) })
+        }
+      }
+    }
+    const transcript = content.outputTranscription?.text || content.output_transcription?.text
+    if (transcript) this.latestAiTranscript = `${this.latestAiTranscript || ''}${transcript}`
+    if (content.turnComplete) {
+      this._handleServerMessage({ data: JSON.stringify({
+        type: 'ai_audio_stream_complete', audioTurnId: this.currentLiveTurnId,
+        fullTranscript: this.latestAiTranscript || '',
+      }) })
+      if (this.latestAiTranscript) this._handleServerMessage({ data: JSON.stringify({
+        type: 'ai_transcript_complete', fullTranscript: this.latestAiTranscript,
+      }) })
+      this.latestAiTranscript = ''
+      this.currentLiveTurnId = null
+    }
+  }
+
+  _sendLiveText(text) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !text) return false
+    this._queueSpokenText(text)
+    return true
+  }
+
+  _sendGatewayMessage(packet) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false
+    const message = typeof packet === 'string' ? JSON.parse(packet) : packet
+    if (message.type === 'speak_question' || message.type === 'repeat_question') return this._sendLiveText(message.text)
+    // Candidate answers are committed through the idempotent HTTP interview API; the Live
+    // connection is output-only so microphone and camera never proxy through Vercel.
+    return true
   }
 
   /**
    * Attach full callbacks and set up microphone pipeline on a pre-connected engine.
    * Called by InterviewRoomPage after consuming the preconnected engine.
    */
-  attachCallbacksAndMic({ onStateChange, onTranscript, onAiQuestion, onInterviewCompleted, onCandidateSpeech, onAudioLevel, onAiSpeakingConcluded, onError, language }) {
+  attachCallbacksAndMic({ onStateChange, onTranscript, onAiQuestion, onInterviewCompleted, onCandidateSpeech, onAudioLevel, onAiSpeakingConcluded, onAiSpeechProgress, onAiAudioStarted, onError, language }) {
     this.isStopped = false
     if (onStateChange) this.onStateChange = onStateChange
     if (onTranscript) this.onTranscript = onTranscript
@@ -206,26 +365,10 @@ export class VoiceInterviewEngine {
     if (onCandidateSpeech) this.onCandidateSpeech = onCandidateSpeech
     if (onAudioLevel) this.onAudioLevel = onAudioLevel
     if (onAiSpeakingConcluded) this.onAiSpeakingConcluded = onAiSpeakingConcluded
+    if (onAiSpeechProgress) this.onAiSpeechProgress = onAiSpeechProgress
+    if (onAiAudioStarted) this.onAiAudioStarted = onAiAudioStarted
     if (onError) this.onError = onError
     if (language) this.language = language
-
-    // Re-assign message and close handlers to use the updated callbacks
-    if (this.ws) {
-      this.ws.onmessage = (event) => this._handleServerMessage(event)
-      this.ws.onerror = (err) => {
-        console.error('[VoiceEngine] WebSocket error:', err)
-        this.onError('WebSocket connection error')
-      }
-      this.ws.onclose = (e) => {
-        this.isConnected = false
-        if (!this.isStopped) {
-          console.warn('[VoiceEngine] WebSocket closed unexpectedly. Attempting reconnection...')
-          this._attemptReconnect()
-        } else {
-          this._updateState('DISCONNECTED')
-        }
-      }
-    }
 
     // Now set up the full audio pipeline
     this._initMicrophonePipelineAsync()
@@ -238,11 +381,11 @@ export class VoiceInterviewEngine {
     this.preventAiInterruption = Boolean(enabled)
     console.log('[VoiceEngine] setPreventAiInterruption:', this.preventAiInterruption)
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(
-        JSON.stringify({
+      this._sendGatewayMessage(
+        {
           type: 'set_prevent_interruption',
           enabled: this.preventAiInterruption,
-        })
+        }
       )
     }
     return this.preventAiInterruption
@@ -346,40 +489,13 @@ export class VoiceInterviewEngine {
         })
       }
 
-      // 3. Connect to WebSocket Gateway
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const host = window.location.hostname === 'localhost' ? 'localhost:5000' : window.location.host
-      const wsUrl = `${protocol}//${host}/ws/voice-interview?token=${encodeURIComponent(this.token)}`
-
-      this.ws = new WebSocket(wsUrl)
-
-      this.ws.onopen = () => {
-        this.isConnected = true
-        this.reconnectAttempts = 0
-        if (!this.processorNode) this._setupMicrophonePipeline()
-        if (!this.recognition) this._setupSpeechRecognition()
-        this._updateState('LISTENING')
-        // Note: InterviewRoomPage explicitly calls markCandidateEnteredRoom() after 2 seconds!
-      }
-
-      this.ws.onmessage = (event) => {
-        this._handleServerMessage(event)
-      }
-
-      this.ws.onerror = (err) => {
-        console.error('[VoiceEngine] WebSocket error:', err)
-        this.onError('WebSocket connection error')
-      }
-
-      this.ws.onclose = (e) => {
-        this.isConnected = false
-        if (!this.isStopped) {
-          console.warn('[VoiceEngine] WebSocket closed unexpectedly. Attempting reconnection...')
-          this._attemptReconnect()
-        } else {
-          this._updateState('DISCONNECTED')
-        }
-      }
+      // Interviewer speech is streamed from the server-side CosyVoice provider over HTTP.
+      this._initializeVoiceTransport()
+      this.isConnected = true
+      this.reconnectAttempts = 0
+      if (this.hasEnteredRoom && !this.processorNode) this._setupMicrophonePipeline()
+      if (this.hasEnteredRoom && !this.recognition) this._setupSpeechRecognition()
+      this._updateState('LISTENING')
     } catch (err) {
       console.error('[VoiceEngine] Initialization failed:', err)
       this.onError(err.message || 'Microphone access or connection failed')
@@ -477,13 +593,8 @@ export class VoiceInterviewEngine {
       const pcm16Data = this._floatTo16BitPCM(inputData)
       const base64Audio = this._arrayBufferToBase64(pcm16Data.buffer)
 
-      this.ws.send(
-        JSON.stringify({
-          type: 'audio_chunk',
-          data: base64Audio,
-          mimeType: 'audio/pcm;rate=16000',
-        })
-      )
+      // Audio is transcribed locally by SpeechRecognition and committed over HTTPS.
+      // Never proxy candidate microphone audio through Vercel.
     }
 
     audioPipelineOutput.connect(this.processorNode)
@@ -502,13 +613,21 @@ export class VoiceInterviewEngine {
       })
     }
     if (muted && this.recognition) {
+      this.isRecognizing = false
       try {
         this.recognition.abort()
       } catch (_) {}
     } else if (!muted && !this.isManualMuted && this.recognition) {
-      try {
-        this.recognition.start()
-      } catch (_) {}
+      if (!this.isRecognizing) {
+        try {
+          this.recognition.start()
+          this.isRecognizing = true
+        } catch (e) {
+          if (e.name === 'InvalidStateError' || e.message?.includes('already started')) {
+            this.isRecognizing = true
+          }
+        }
+      }
     }
   }
 
@@ -562,7 +681,7 @@ export class VoiceInterviewEngine {
           this._updateState('LISTENING')
           // If candidate already reached room and 2s passed, send room enter
           if (this.hasEnteredRoom && this.ws?.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'candidate_entered_room' }))
+            this._sendGatewayMessage({ type: 'candidate_entered_room' })
           }
           break
 
@@ -585,6 +704,9 @@ export class VoiceInterviewEngine {
           this._muteMicrophoneHardware(true)
           this.audioState = 'AI_SPEAKING'
           this._updateState('SPEAKING')
+          if (this.onAiAudioStarted) {
+            this.onAiAudioStarted(msg)
+          }
           break
 
         case 'ai_audio_chunk':
@@ -687,7 +809,7 @@ export class VoiceInterviewEngine {
     this.hasEnteredRoom = true
     if (this.ws?.readyState === WebSocket.OPEN) {
       console.log('[VoiceEngine] Candidate entered room (2s delay passed). Triggering AI interview start.')
-      this.ws.send(JSON.stringify({ type: 'candidate_entered_room' }))
+      this._sendGatewayMessage({ type: 'candidate_entered_room' })
     }
   }
 
@@ -699,12 +821,12 @@ export class VoiceInterviewEngine {
 
     // 1. If WebSocket is connected, request Voice Gateway to deliver the prompt
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(
-        JSON.stringify({
+      this._sendGatewayMessage(
+        {
           type: force ? 'repeat_question' : 'speak_question',
           text: spokenText,
           force,
-        })
+        }
       )
       return
     }
@@ -756,7 +878,26 @@ export class VoiceInterviewEngine {
     return this.speakAiQuestion(spokenText, true)
   }
 
+  _resetTurnCompletionTimer(timeoutMs = 90000) {
+    if (this.turnCompletionTimer) {
+      clearTimeout(this.turnCompletionTimer)
+      this.turnCompletionTimer = null
+    }
+
+    // Dynamic turn safety watchdog: ensures speaking turn doesn't hang forever,
+    // but scales appropriately with spoken script length and resets on each active chunk.
+    this.turnCompletionTimer = setTimeout(() => {
+      if (this.isAiTurnActive || this.conversationState === 'SPEAKING') {
+        console.warn(`[VoiceEngine] Safety turn watchdog reached (${timeoutMs}ms). Concluding speaking turn and passing mic to candidate.`)
+        this._stopAiAudioPlayback()
+        this._concludeAiSpeakingTurn()
+      }
+    }, timeoutMs)
+  }
+
   _beginAudioTurn(turnId) {
+    this._resetTurnCompletionTimer(90000)
+
     if (turnId != null && this.activeAudioTurnId === turnId) return
     this.aiAudioPlayer.beginTurn(turnId)
     this.activeAudioTurnId = turnId ?? this.aiAudioPlayer.turnId
@@ -771,36 +912,46 @@ export class VoiceInterviewEngine {
     if (chunkPayload?.audioTurnId != null && chunkPayload.audioTurnId !== this.activeAudioTurnId) this._beginAudioTurn(chunkPayload.audioTurnId)
     this.hasReceivedNativeAudioInCurrentTurn = true
     this.isAiTurnActive = true
+    // Reset watchdog on each active audio chunk: as long as AI is playing chunks, keep turn alive!
+    this._resetTurnCompletionTimer(90000)
     return this.aiAudioPlayer.enqueue(chunkPayload)
   }
 
   _handleAiTurnComplete(message) {
-    if (message.audioTurnId != null && this.activeAudioTurnId != null && message.audioTurnId !== this.activeAudioTurnId) {
-      console.warn('[VoiceEngine] Ignoring completion for a stale audio turn.')
+    const isMatchingTurn =
+      message.audioTurnId == null ||
+      this.activeAudioTurnId == null ||
+      message.audioTurnId === this.activeAudioTurnId ||
+      message.audioTurnId === this.aiAudioPlayer?.turnId
+
+    if (!isMatchingTurn && this.hasReceivedNativeAudioInCurrentTurn) {
+      console.warn('[VoiceEngine] Ignoring completion for a stale audio turn:', message.audioTurnId, 'current:', this.activeAudioTurnId)
       return
     }
+
     if (this.activeAudioTurnId == null && message.audioTurnId != null) this.activeAudioTurnId = message.audioTurnId
     this.audioState = 'AI_FINISHING'
     this.isAiTurnActive = false
+
     if (message.audioUnavailable || this.audioPlaybackFailed || !this.hasReceivedNativeAudioInCurrentTurn) {
-      this.onError("We're having trouble playing the interviewer's audio. Please wait a moment.")
       this._stopAiAudioPlayback()
       this._concludeAiSpeakingTurn()
       return
     }
+
     this.aiAudioPlayer.completeStream().catch((err) => {
       this.audioPlaybackFailed = true
       console.error('[VoiceEngine] Could not complete AI audio stream:', err.message)
       this._stopAiAudioPlayback()
-      this.onError("We're having trouble playing the interviewer's audio. Please wait a moment.")
       this._concludeAiSpeakingTurn()
     })
   }
 
   /**
-   * Safe conclusion of AI speaking turn
+   * Safe conclusion of AI speaking turn - un-mutes microphone and transitions to LISTENING
    */
   _concludeAiSpeakingTurn() {
+    this._resolvePlaybackWaiter(this.activeAudioTurnId)
     if (this.turnCompletionTimer) {
       clearTimeout(this.turnCompletionTimer)
       this.turnCompletionTimer = null
@@ -808,17 +959,58 @@ export class VoiceInterviewEngine {
     this.isAiTurnActive = false
     this.isAutoMutedWhileSpeaking = false
     this.isPlaying = false
-    this.audioState = this.isManualMuted ? 'MUTED' : 'LISTENING'
     this.hasReceivedNativeAudioInCurrentTurn = false
+
+    // Cleanly clear residual playback sources so candidate speech filter never trips
+    if (this.aiAudioPlayer?.activeSources) {
+      this.aiAudioPlayer.activeSources.forEach((src) => {
+        try { src.stop?.() } catch (_) {}
+        try { src.disconnect() } catch (_) {}
+      })
+      this.aiAudioPlayer.activeSources.clear()
+    }
+
     if (!this.isManualMuted) {
+      this.isMuted = false
+      this.audioState = 'LISTENING'
       this._muteMicrophoneHardware(false)
       this._updateState('LISTENING')
     } else {
+      this.audioState = 'MUTED'
       this._updateState('MUTED')
     }
+
     if (this.onAiSpeakingConcluded) {
       this.onAiSpeakingConcluded()
     }
+  }
+
+  /**
+   * Authoritative method to pass the microphone to the candidate and begin listening
+   */
+  unmuteAndStartListening() {
+    if (this.turnCompletionTimer) {
+      clearTimeout(this.turnCompletionTimer)
+      this.turnCompletionTimer = null
+    }
+    this.isManualMuted = false
+    this.isMuted = false
+    this.isAutoMutedWhileSpeaking = false
+    this.isAiTurnActive = false
+    this.isPlaying = false
+    this.hasReceivedNativeAudioInCurrentTurn = false
+
+    if (this.aiAudioPlayer?.activeSources) {
+      this.aiAudioPlayer.activeSources.forEach((src) => {
+        try { src.stop?.() } catch (_) {}
+        try { src.disconnect() } catch (_) {}
+      })
+      this.aiAudioPlayer.activeSources.clear()
+    }
+
+    this.audioState = 'LISTENING'
+    this._muteMicrophoneHardware(false)
+    this._updateState('LISTENING')
   }
 
   /**
@@ -832,6 +1024,11 @@ export class VoiceInterviewEngine {
     this.isAiTurnActive = false
     this.isPlaying = false
     this.hasReceivedNativeAudioInCurrentTurn = false
+    this.spokenTextQueue = []
+    this.ttsAbortController?.abort()
+    this.ttsAbortController = null
+    for (const resolve of this.playbackWaiters.values()) resolve()
+    this.playbackWaiters.clear()
     this.aiAudioPlayer.stop()
     this.audioState = 'INTERRUPTED'
   }
@@ -864,8 +1061,8 @@ export class VoiceInterviewEngine {
           }
         }
 
-        // Interruption & Barge-in Handling while AI is speaking:
-        if (this.conversationState === 'SPEAKING' || this.isAiTurnActive || this.aiAudioPlayer.activeSources.size > 0) {
+        // Interruption & Barge-in Handling while AI is actively speaking:
+        if (this.conversationState === 'SPEAKING' && this.isAiTurnActive) {
           // If "Prevent AI Interruption" is enabled, background noise / speech MUST NOT interrupt the AI!
           if (this.preventAiInterruption) {
             return
@@ -883,7 +1080,7 @@ export class VoiceInterviewEngine {
             }
             this.isAutoMutedWhileSpeaking = false
             if (this.ws?.readyState === WebSocket.OPEN) {
-              this.ws.send(JSON.stringify({ type: 'candidate_interrupted' }))
+              this._sendGatewayMessage({ type: 'candidate_interrupted' })
             }
             this._updateState('LISTENING')
             if (this.onAiSpeakingConcluded) {
@@ -903,21 +1100,41 @@ export class VoiceInterviewEngine {
         }
       }
 
+      this.recognition.onstart = () => {
+        this.isRecognizing = true
+      }
+
       this.recognition.onerror = (e) => {
         if (e.error !== 'no-speech') {
           console.warn('[VoiceEngine] SpeechRecognition notice:', e.error)
         }
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          this.isRecognizing = false
+        }
       }
 
       this.recognition.onend = () => {
-        if (this.isConnected && !this.isMuted && this.recognition) {
+        this.isRecognizing = false
+        if (
+          this.isConnected &&
+          !this.isMuted &&
+          !this.isManualMuted &&
+          !this.isAutoMutedWhileSpeaking &&
+          this.conversationState !== 'SPEAKING' &&
+          !this.isAiTurnActive &&
+          this.recognition
+        ) {
           try {
             this.recognition.start()
+            this.isRecognizing = true
           } catch (_) {}
         }
       }
 
-      this.recognition.start()
+      try {
+        this.recognition.start()
+        this.isRecognizing = true
+      } catch (_) {}
     } catch (err) {
       console.warn('[VoiceEngine] SpeechRecognition unavailable:', err)
     }
@@ -969,13 +1186,13 @@ export class VoiceInterviewEngine {
     this._stopAiAudioPlayback()
     if (!text || !text.trim() || !this.ws || this.ws.readyState !== WebSocket.OPEN) return
     this._updateState('THINKING')
-    this.ws.send(
-      JSON.stringify({
+    this._sendGatewayMessage(
+      {
         type: 'candidate_transcript',
         text: text.trim(),
         questionSequence: metadata.questionSequence,
         questionId: metadata.questionId,
-      })
+      }
     )
   }
 
@@ -984,11 +1201,11 @@ export class VoiceInterviewEngine {
    */
   triggerSilenceNudge(nudgeIndex = 1) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
-    this.ws.send(
-      JSON.stringify({
+    this._sendGatewayMessage(
+      {
         type: 'trigger_nudge',
         nudgeIndex,
-      })
+      }
     )
   }
 
@@ -997,11 +1214,11 @@ export class VoiceInterviewEngine {
    */
   skipUnansweredQuestion(unansweredCount = 1) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
-    this.ws.send(
-      JSON.stringify({
+    this._sendGatewayMessage(
+      {
         type: 'skip_unanswered_question',
         unansweredCount,
-      })
+      }
     )
   }
 
@@ -1010,10 +1227,10 @@ export class VoiceInterviewEngine {
    */
   terminateForUnanswered() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
-    this.ws.send(
-      JSON.stringify({
+    this._sendGatewayMessage(
+      {
         type: 'terminate_unanswered',
-      })
+      }
     )
   }
 
@@ -1021,25 +1238,50 @@ export class VoiceInterviewEngine {
    * Toggle candidate microphone mute
    */
   toggleMute() {
+    if (this.isAutoMutedWhileSpeaking || this.isAiTurnActive || this.conversationState === 'SPEAKING') {
+      // Candidate clicked to unmute during or right after AI speaking turn -> halt audio and pass mic immediately
+      this._stopAiAudioPlayback()
+      this.isAutoMutedWhileSpeaking = false
+      this.isAiTurnActive = false
+      this.isManualMuted = false
+      this.isMuted = false
+      this._muteMicrophoneHardware(false)
+      this._updateState('LISTENING')
+      if (this.onAiSpeakingConcluded) {
+        this.onAiSpeakingConcluded()
+      }
+      return false
+    }
+
     this.isManualMuted = !this.isManualMuted
     this.isMuted = this.isManualMuted
-    if (!this.isAutoMutedWhileSpeaking) {
-      this._muteMicrophoneHardware(this.isMuted)
-    }
-    this._updateState(this.isMuted ? 'MUTED' : (this.isAutoMutedWhileSpeaking ? 'SPEAKING' : 'LISTENING'))
+    this._muteMicrophoneHardware(this.isMuted)
+    this._updateState(this.isMuted ? 'MUTED' : 'LISTENING')
     return this.isMuted
   }
 
   /**
-   * Set candidate microphone mute state explicitly (e.g. auto-mute for coding questions)
+   * Set candidate microphone mute state explicitly
    */
   setMute(muted) {
+    if (!muted && (this.isAutoMutedWhileSpeaking || this.isAiTurnActive || this.conversationState === 'SPEAKING')) {
+      this._stopAiAudioPlayback()
+      this.isAutoMutedWhileSpeaking = false
+      this.isAiTurnActive = false
+      this.isManualMuted = false
+      this.isMuted = false
+      this._muteMicrophoneHardware(false)
+      this._updateState('LISTENING')
+      if (this.onAiSpeakingConcluded) {
+        this.onAiSpeakingConcluded()
+      }
+      return false
+    }
+
     this.isManualMuted = Boolean(muted)
     this.isMuted = this.isManualMuted
-    if (!this.isAutoMutedWhileSpeaking) {
-      this._muteMicrophoneHardware(this.isMuted)
-    }
-    this._updateState(this.isMuted ? 'MUTED' : (this.isAutoMutedWhileSpeaking ? 'SPEAKING' : 'LISTENING'))
+    this._muteMicrophoneHardware(this.isMuted)
+    this._updateState(this.isMuted ? 'MUTED' : 'LISTENING')
     return this.isMuted
   }
 

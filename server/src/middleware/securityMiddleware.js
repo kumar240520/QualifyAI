@@ -6,11 +6,13 @@
  * 3. AI Prompt Injection Neutralization
  */
 
-// In-memory sliding window request store
+import { createHash } from 'node:crypto'
+import { getServiceSupabaseClient } from '../integrations/supabaseClient.js'
+
+// Local-only fallback used when running without the Postgres limiter during development.
 const requestBuckets = new Map()
 
-// Clean up stale bucket entries every 5 minutes
-setInterval(() => {
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') setInterval(() => {
   const now = Date.now()
   for (const [key, timestamps] of requestBuckets.entries()) {
     const valid = timestamps.filter((t) => now - t < 15 * 60 * 1000)
@@ -20,7 +22,7 @@ setInterval(() => {
       requestBuckets.set(key, valid)
     }
   }
-}, 5 * 60 * 1000)
+}, 5 * 60 * 1000).unref?.()
 
 /**
  * Creates a sliding-window rate limiter
@@ -36,30 +38,55 @@ export function createRateLimiter({
   keyGenerator = (req) => req.ip || req.headers['x-forwarded-for'] || 'global',
 }) {
   return (req, res, next) => {
-    const key = `${req.baseUrl || req.path}:${keyGenerator(req)}`
-    const now = Date.now()
-
-    let timestamps = requestBuckets.get(key) || []
-    timestamps = timestamps.filter((t) => now - t < windowMs)
-
-    if (timestamps.length >= maxRequests) {
-      const resetTimeMs = Math.ceil((timestamps[0] + windowMs - now) / 1000)
-      res.setHeader('Retry-After', resetTimeMs)
+    const source = `${req.baseUrl || req.path}:${keyGenerator(req)}`
+    const key = createHash('sha256').update(source).digest('hex')
+    const localFallback = () => {
+      const now = Date.now()
+      const timestamps = (requestBuckets.get(key) || []).filter((timestamp) => now - timestamp < windowMs)
+      if (timestamps.length >= maxRequests) {
+        const retryAfter = Math.ceil((timestamps[0] + windowMs - now) / 1000)
+        res.setHeader('Retry-After', retryAfter)
+        res.setHeader('X-RateLimit-Limit', maxRequests)
+        res.setHeader('X-RateLimit-Remaining', 0)
+        return res.status(429).json({ success: false, error: message, retryAfterSeconds: retryAfter })
+      }
+      timestamps.push(now)
+      requestBuckets.set(key, timestamps)
       res.setHeader('X-RateLimit-Limit', maxRequests)
-      res.setHeader('X-RateLimit-Remaining', 0)
-      return res.status(429).json({
-        success: false,
-        error: message,
-        retryAfterSeconds: resetTimeMs,
-      })
+      res.setHeader('X-RateLimit-Remaining', maxRequests - timestamps.length)
+      return next()
     }
 
-    timestamps.push(now)
-    requestBuckets.set(key, timestamps)
-
-    res.setHeader('X-RateLimit-Limit', maxRequests)
-    res.setHeader('X-RateLimit-Remaining', maxRequests - timestamps.length)
-    next()
+    let supabase
+    try {
+      supabase = getServiceSupabaseClient()
+    } catch (error) {
+      if (!process.env.VERCEL) return localFallback()
+      console.error('[Security] Persistent rate limiter unavailable:', error.message)
+      return res.status(503).json({ success: false, error: 'Request protection is temporarily unavailable. Please retry shortly.' })
+    }
+    supabase.rpc('consume_api_rate_limit', {
+      p_bucket_key: key,
+      p_window_seconds: Math.ceil(windowMs / 1000),
+      p_max_requests: maxRequests,
+    }).then(({ data, error }) => {
+      if (error) throw error
+      const result = Array.isArray(data) ? data[0] : data
+      if (!result || typeof result.allowed !== 'boolean') throw new Error('Invalid rate limiter response')
+      res.setHeader('X-RateLimit-Limit', maxRequests)
+      res.setHeader('X-RateLimit-Remaining', result.remaining)
+      if (!result.allowed) {
+        res.setHeader('Retry-After', result.retryAfterSeconds)
+        return res.status(429).json({ success: false, error: message, retryAfterSeconds: result.retryAfterSeconds })
+      }
+      return next()
+    }).catch((error) => {
+      if (process.env.VERCEL) {
+        console.error('[Security] Persistent rate limit failed:', error.message)
+        return res.status(503).json({ success: false, error: 'Request protection is temporarily unavailable. Please retry shortly.' })
+      }
+      return localFallback()
+    })
   }
 }
 

@@ -18,9 +18,17 @@ import {
   HelpCircle,
   FileCheck,
   AlertCircle,
-  Loader2,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext.jsx'
+import { normalizeApiError } from '../utils/errorNormalizer.js'
+import {
+  validateRecruiterOnboarding,
+  validateName,
+  validateText,
+  validateEmail,
+  validateUrl,
+  validatePhone,
+} from '../utils/validators.js'
 
 const INDUSTRY_DOMAINS = [
   'Enterprise SaaS & Cloud Infrastructure',
@@ -69,6 +77,7 @@ export default function RecruiterOnboardingPage() {
   const [currentStep, setCurrentStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
 
   // Form State (with pre-fill and local draft recovery)
   const [formData, setFormData] = useState(() => {
@@ -106,6 +115,9 @@ export default function RecruiterOnboardingPage() {
   const updateField = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
     setErrorMsg('')
+    if (fieldErrors[field]) {
+      setFieldErrors((prev) => ({ ...prev, [field]: null }))
+    }
   }
 
   const toggleRole = (role) => {
@@ -118,39 +130,72 @@ export default function RecruiterOnboardingPage() {
           : [...prev.selectedRoles, role],
       }
     })
+    if (fieldErrors.selectedRoles) {
+      setFieldErrors((prev) => ({ ...prev, selectedRoles: null }))
+    }
+    setErrorMsg('')
   }
 
   // Step 1 Validation
   const validateStep1 = () => {
-    if (!formData.fullName.trim()) return 'Please enter your full name.'
-    if (!formData.companyName.trim()) return 'Please enter your company or organization name.'
-    if (!formData.workEmail.trim() || !formData.workEmail.includes('@'))
-      return 'Please enter a valid work email.'
-    return null
+    const errors = {}
+    const nameRes = validateName(formData.fullName, 'Full legal name', { min: 2, max: 100 })
+    if (!nameRes.valid) errors.fullName = nameRes.error
+
+    const compRes = validateText(formData.companyName, 'Company name', { min: 2, max: 150, required: true })
+    if (!compRes.valid) errors.companyName = compRes.error
+
+    const emailRes = validateEmail(formData.workEmail, 'Work email')
+    if (!emailRes.valid) errors.workEmail = emailRes.error
+
+    if (formData.phone) {
+      const phoneRes = validatePhone(formData.phone, { required: false })
+      if (!phoneRes.valid) errors.phone = phoneRes.error
+    }
+
+    return {
+      isValid: Object.keys(errors).length === 0,
+      errors,
+    }
   }
 
   // Step 2 Validation
   const validateStep2 = () => {
-    if (!formData.website.trim()) return 'Please enter your official company domain or website.'
-    if (formData.selectedRoles.length === 0) return 'Please select at least one target engineering role.'
-    return null
+    const errors = {}
+    const webRes = validateUrl(formData.website, 'Company domain or website', { required: true })
+    if (!webRes.valid) errors.website = webRes.error
+
+    if (!Array.isArray(formData.selectedRoles) || formData.selectedRoles.length === 0) {
+      errors.selectedRoles = 'Please select at least one target engineering role.'
+    }
+
+    return {
+      isValid: Object.keys(errors).length === 0,
+      errors,
+    }
   }
 
   const handleNext = () => {
     if (currentStep === 1) {
-      const err = validateStep1()
-      if (err) {
-        setErrorMsg(err)
+      const v = validateStep1()
+      if (!v.isValid) {
+        setFieldErrors(v.errors)
+        setErrorMsg('Please complete all required fields correctly before proceeding.')
         return
       }
+      setFieldErrors({})
+      setErrorMsg('')
       setCurrentStep(2)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } else if (currentStep === 2) {
-      const err = validateStep2()
-      if (err) {
-        setErrorMsg(err)
+      const v = validateStep2()
+      if (!v.isValid) {
+        setFieldErrors(v.errors)
+        setErrorMsg('Please complete all required verification fields before proceeding.')
         return
       }
+      setFieldErrors({})
+      setErrorMsg('')
       setCurrentStep(3)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
@@ -158,6 +203,7 @@ export default function RecruiterOnboardingPage() {
 
   const handleBack = () => {
     setErrorMsg('')
+    setFieldErrors({})
     if (currentStep > 1) {
       setCurrentStep((prev) => prev - 1)
       window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -171,8 +217,16 @@ export default function RecruiterOnboardingPage() {
       return
     }
 
+    const v = validateRecruiterOnboarding(formData)
+    if (!v.isValid) {
+      setFieldErrors(v.errors)
+      setErrorMsg('Some required onboarding information is missing. Please review previous steps.')
+      return
+    }
+
     setIsSubmitting(true)
     setErrorMsg('')
+    setFieldErrors({})
     try {
       const success = await completeOnboarding(formData)
       if (success) {
@@ -186,7 +240,9 @@ export default function RecruiterOnboardingPage() {
       }
     } catch (err) {
       console.error('Account activation error:', err)
-      setErrorMsg(err.message || 'An unexpected error occurred during account activation.')
+      const norm = normalizeApiError(err, 'An unexpected error occurred during account activation.')
+      setErrorMsg(norm.message)
+      setFieldErrors(norm.fields || {})
     } finally {
       setIsSubmitting(false)
     }
@@ -355,8 +411,13 @@ export default function RecruiterOnboardingPage() {
                       value={formData.fullName}
                       onChange={(e) => updateField('fullName', e.target.value)}
                       placeholder="e.g. Sarah Jenkins"
-                      className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:border-blue-500 focus:outline-none transition"
+                      className={`w-full h-10 px-3 bg-slate-50 border ${
+                        fieldErrors.fullName ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'
+                      } rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:border-blue-500 focus:outline-none transition`}
                     />
+                    {fieldErrors.fullName && (
+                      <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.fullName}</p>
+                    )}
                   </div>
 
                   <div className="space-y-1">
@@ -368,8 +429,13 @@ export default function RecruiterOnboardingPage() {
                       value={formData.workEmail}
                       onChange={(e) => updateField('workEmail', e.target.value)}
                       placeholder="sjenkins@enterprise.com"
-                      className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:border-blue-500 focus:outline-none transition"
+                      className={`w-full h-10 px-3 bg-slate-50 border ${
+                        fieldErrors.workEmail ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'
+                      } rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:border-blue-500 focus:outline-none transition`}
                     />
+                    {fieldErrors.workEmail && (
+                      <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.workEmail}</p>
+                    )}
                   </div>
 
                   <div className="space-y-1 sm:col-span-2">
@@ -381,8 +447,13 @@ export default function RecruiterOnboardingPage() {
                       value={formData.companyName}
                       onChange={(e) => updateField('companyName', e.target.value)}
                       placeholder="e.g. Acme Distributed Technologies"
-                      className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:border-blue-500 focus:outline-none transition"
+                      className={`w-full h-10 px-3 bg-slate-50 border ${
+                        fieldErrors.companyName ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'
+                      } rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:border-blue-500 focus:outline-none transition`}
                     />
+                    {fieldErrors.companyName && (
+                      <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.companyName}</p>
+                    )}
                   </div>
 
                   <div className="space-y-1">
@@ -487,9 +558,14 @@ export default function RecruiterOnboardingPage() {
                         value={formData.website}
                         onChange={(e) => updateField('website', e.target.value)}
                         placeholder="https://acme.io"
-                        className="w-full h-10 pl-9 pr-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:border-blue-500 focus:outline-none transition"
+                        className={`w-full h-10 pl-9 pr-3 bg-slate-50 border ${
+                          fieldErrors.website ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'
+                        } rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:border-blue-500 focus:outline-none transition`}
                       />
                     </div>
+                    {fieldErrors.website && (
+                      <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.website}</p>
+                    )}
                   </div>
 
                   {/* Target Roles Multi-Select */}
@@ -517,6 +593,9 @@ export default function RecruiterOnboardingPage() {
                         )
                       })}
                     </div>
+                    {fieldErrors.selectedRoles && (
+                      <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.selectedRoles}</p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

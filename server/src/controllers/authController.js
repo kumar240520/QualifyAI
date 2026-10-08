@@ -1,26 +1,28 @@
 import { authService } from '../services/authService.js'
+import {
+  assertValid,
+  validateSignupPayload,
+  validateLoginPayload,
+  validateOnboardingPayload,
+  validateEmail,
+  validatePassword,
+} from '../validators/index.js'
+import { AuthenticationError } from '../utils/errors.js'
 
 export const authController = {
   /**
    * Handle candidate/recruiter signup
    */
-  async signup(req, res) {
+  async signup(req, res, next) {
     try {
-      const { email, password, fullName, organizationName, role } = req.body
-
-      if (!email || !email.includes('@')) {
-        return res.status(400).json({ success: false, error: 'Valid email address is required.' })
-      }
-      if (!password || password.length < 6) {
-        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long.' })
-      }
+      const validated = assertValid(validateSignupPayload(req.body))
 
       const result = await authService.signUpUser({
-        email,
-        password,
-        fullName,
-        organizationName,
-        role: role || 'ORG_ADMIN',
+        email: validated.email,
+        password: validated.password,
+        fullName: validated.fullName,
+        organizationName: validated.organizationName,
+        role: validated.role,
       })
 
       return res.status(201).json({
@@ -28,84 +30,77 @@ export const authController = {
         data: result,
       })
     } catch (err) {
-      console.error('[AuthController.signup] Error:', err.message)
-      return res.status(400).json({
-        success: false,
-        error: err.message || 'Signup failed.',
-      })
+      next(err)
     }
   },
 
   /**
    * Handle user login
    */
-  async login(req, res) {
+  async login(req, res, next) {
     try {
-      const { email, password } = req.body
+      const validated = assertValid(validateLoginPayload(req.body))
 
-      if (!email || !password) {
-        return res.status(400).json({ success: false, error: 'Email and password are required.' })
-      }
-
-      const result = await authService.signInUser({ email, password })
+      const result = await authService.signInUser({
+        email: validated.email,
+        password: validated.password,
+      })
 
       return res.status(200).json({
         success: true,
         data: result,
       })
     } catch (err) {
-      console.error('[AuthController.login] Error:', err.message)
-      return res.status(401).json({
-        success: false,
-        error: err.message || 'Invalid email or password.',
-      })
+      next(err)
     }
   },
 
   /**
    * Initiate forgot password flow
    */
-  async forgotPassword(req, res) {
+  async forgotPassword(req, res, next) {
     try {
-      const { email, redirectTo } = req.body
-
-      if (!email || !email.includes('@')) {
-        return res.status(400).json({ success: false, error: 'Valid email address is required.' })
+      const emailRes = validateEmail(req.body?.email)
+      if (!emailRes.valid) {
+        assertValid(emailRes, 'Please enter a valid email address.')
       }
 
-      const result = await authService.requestPasswordReset({ email, redirectTo })
+      const result = await authService.requestPasswordReset({
+        email: emailRes.value,
+        redirectTo: req.body?.redirectTo,
+      })
 
       return res.status(200).json({
         success: true,
         message: result.message,
       })
     } catch (err) {
-      console.error('[AuthController.forgotPassword] Error:', err.message)
-      return res.status(400).json({
-        success: false,
-        error: err.message || 'Failed to send password reset email.',
-      })
+      next(err)
     }
   },
 
   /**
    * Reset / update password with token
    */
-  async resetPassword(req, res) {
+  async resetPassword(req, res, next) {
     try {
-      const token = req.token || (req.headers.authorization && req.headers.authorization.split(' ')[1]) || req.body.token
-      const { password } = req.body
+      const token =
+        req.token ||
+        (req.headers.authorization && req.headers.authorization.split(' ')[1]) ||
+        req.body?.token
 
-      if (!password || password.length < 6) {
-        return res.status(400).json({ success: false, error: 'New password must be at least 6 characters long.' })
-      }
       if (!token) {
-        return res.status(401).json({ success: false, error: 'Authentication token required for password update.' })
+        throw new AuthenticationError('Authentication token required for password update.')
+      }
+
+      const passRes = validatePassword(req.body?.password, { min: 6 })
+      if (!passRes.valid) {
+        assertValid(passRes, 'Please choose a stronger password.')
       }
 
       const result = await authService.resetPassword({
         accessToken: token,
-        newPassword: password,
+        newPassword: passRes.value,
       })
 
       return res.status(200).json({
@@ -113,18 +108,14 @@ export const authController = {
         message: result.message,
       })
     } catch (err) {
-      console.error('[AuthController.resetPassword] Error:', err.message)
-      return res.status(400).json({
-        success: false,
-        error: err.message || 'Failed to update password.',
-      })
+      next(err)
     }
   },
 
   /**
    * Get current authenticated user details
    */
-  async getMe(req, res) {
+  async getMe(req, res, next) {
     try {
       const user = req.user
       const userDetails = await authService.getUserProfileAndOrg(user.id, req.token)
@@ -141,23 +132,19 @@ export const authController = {
         },
       })
     } catch (err) {
-      console.error('[AuthController.getMe] Error:', err.message)
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to retrieve user profile.',
-      })
+      next(err)
     }
   },
 
   /**
    * Complete recruiter onboarding and persist profile & organization data
    */
-  async completeOnboarding(req, res) {
+  async completeOnboarding(req, res, next) {
     try {
       const user = req.user
-      const onboardingData = req.body || {}
+      const validated = assertValid(validateOnboardingPayload(req.body))
 
-      const result = await authService.updateOnboarding(user.id, onboardingData)
+      const result = await authService.updateOnboarding(user.id, validated)
 
       return res.status(200).json({
         success: true,
@@ -165,11 +152,7 @@ export const authController = {
         data: result,
       })
     } catch (err) {
-      console.error('[AuthController.completeOnboarding] Error:', err.message)
-      return res.status(400).json({
-        success: false,
-        error: err.message || 'Failed to complete recruiter onboarding.',
-      })
+      next(err)
     }
   },
 

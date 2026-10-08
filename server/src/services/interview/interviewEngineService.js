@@ -3,11 +3,9 @@ import { answerAnalyzer } from './answerAnalyzer.js'
 import { adaptivePolicyService } from './adaptivePolicyService.js'
 import { rubricService } from '../rubricService.js'
 import { realtimeQuestionGenerator } from './realtimeQuestionGenerator.js'
-import { getVoiceGateway } from '../voice/voiceGateway.js'
 import { randomUUID } from 'node:crypto'
 import { validateActiveQuestionAnswer, parseInterviewDurationMinutes, createAnswerCommit, isRepeatQuestionRequest } from './interviewState.js'
 
-const sessionDeadlineTimers = new Map()
 const activeTurnPromises = new Map()
 const sessionStartPromises = new Map()
 
@@ -48,8 +46,19 @@ export const interviewEngineService = {
 
     if (feedbackMsg) {
       const cleanFeedback = feedbackMsg.replace(/^[A-Z\s]+:\s*/, '').trim()
-      const cleanQuestionStart = questionText.toLowerCase().substring(0, 30)
-      if (!cleanFeedback.toLowerCase().includes(cleanQuestionStart)) {
+      const feedbackWords = cleanFeedback.toLowerCase().match(/[a-z0-9]+/g) || []
+      const questionWords = questionText.toLowerCase().match(/[a-z0-9]+/g) || []
+      const overlapLength = Math.min(6, feedbackWords.length, questionWords.length)
+      const feedbackPhrases = new Set()
+      for (let i = 0; i <= feedbackWords.length - overlapLength; i++) {
+        feedbackPhrases.add(feedbackWords.slice(i, i + overlapLength).join(' '))
+      }
+      const containsQuestion = overlapLength >= 4 && questionWords.some((_, index) =>
+        index <= questionWords.length - overlapLength && feedbackPhrases.has(questionWords.slice(index, index + overlapLength).join(' '))
+      )
+      // Feedback often already includes the generated question after a conversational lead-in.
+      // Keep that full script once instead of appending the question a second time.
+      if (!containsQuestion) {
         fullSpokenLeadIn = `${cleanFeedback} ${questionText}`
       } else {
         fullSpokenLeadIn = cleanFeedback
@@ -101,7 +110,7 @@ export const interviewEngineService = {
       .single()
 
     if (invError || !invitation) {
-      console.error('[InterviewEngine._resolveTokenContext] Token lookup error:', invError, 'for token:', token)
+      console.error('[InterviewEngine._resolveTokenContext] Invitation token lookup failed:', invError?.message || 'not found')
       const err = new Error('Invalid or non-existent invitation token.')
       err.status = 404
       throw err
@@ -205,8 +214,17 @@ export const interviewEngineService = {
         .select()
         .single()
 
-      if (intError) throw new Error(`Failed to initialize interview: ${intError.message}`)
-      interview = newInterview
+      if (intError?.code === '23505') {
+        const { data: concurrentInterview, error: retryError } = await supabase
+          .from('interviews')
+          .select('*')
+          .eq('job_id', job.id)
+          .eq('candidate_id', candidate.id)
+          .single()
+        if (retryError || !concurrentInterview) throw new Error(`Failed to recover concurrent interview creation: ${retryError?.message || intError.message}`)
+        interview = concurrentInterview
+      } else if (intError) throw new Error(`Failed to initialize interview: ${intError.message}`)
+      else interview = newInterview
     }
 
     // 2. Locate or create interview session
@@ -246,7 +264,7 @@ export const interviewEngineService = {
           timestamp: new Date().toISOString(),
           sequence: 0,
           question_text: `Welcome to QualifyAI! Please introduce yourself, your technical background, and your key project experience for the ${jobRole} position.`,
-          spoken_lead_in: `Welcome to QualifyAI${candidateName}. I will be your autonomous AI interviewer for the ${jobRole} position today. In this session, I will guide you through adaptive technical questions one by one. You can speak naturally or use the interactive on-screen editor, and submit your response whenever you are ready. To begin, please introduce yourself, your technical background, and your key projects.`,
+          spoken_lead_in: `Welcome to QualifyAI, ${candidateName}. I will be your autonomous AI interviewer for the ${jobRole} position today. In this session, I will guide you through adaptive technical questions one by one. You can speak naturally or use the interactive on-screen editor, and submit your response whenever you are ready. To begin, please introduce yourself, your technical background, and your key projects.`,
           type: 'BEHAVIORAL',
           difficulty: 'MEDIUM',
           rubric_criterion_id: null,
@@ -420,8 +438,6 @@ export const interviewEngineService = {
         transcripts: currentTranscripts,
       }
     }
-    this._scheduleSessionDeadline({ interview, session, candidate, job, meta: currentMeta, token, endsAt: runtimeTimeConstraints.endsAt })
-
     return {
       interview,
       session: {
@@ -432,6 +448,7 @@ export const interviewEngineService = {
         ends_at: currentMeta.ends_at,
         duration_minutes: currentMeta.duration_minutes || configuredDuration,
         remaining_seconds: runtimeTimeConstraints.remainingSeconds,
+        warning_count: Number(interview.warning_count) || 0,
         current_question_sequence: activeQuestionObj.sequence || 0,
         session_metadata: currentMeta,
         job: { id: job.id, title: job.title, department: job.department, seniority: job.seniority },
@@ -580,8 +597,6 @@ export const interviewEngineService = {
     const spoken = nextQuestion.spoken_lead_in || nextQuestion.question_text
     await supabase.from('transcripts').insert({ interview_id: targetInterview.id, speaker: 'AI', content: spoken, sequence: (lastTranscript?.[0]?.sequence || 0) + 1 })
     const questionEvent = { type: 'ai_question', sessionId: session.id, eventId: `${session.id}-${nextQuestion.id}`, sequence: eventSequence + 1, questionSequence: nextSequence, question: nextQuestion, aiMessage: spoken, remainingSeconds: timeCheck.remainingSeconds, speakAloud: true, timestamp: new Date().toISOString() }
-    getVoiceGateway()?.broadcastToSession(session.id, questionEvent)
-    getVoiceGateway()?.speakPromptToSession(session.id, spoken)
     return { isCompleted: false, sequence: nextSequence, nextQuestion, remainingSeconds: timeCheck.remainingSeconds, coverageMatrix: meta.coverage_matrix || [], session: { id: session.id, interview_id: targetInterview.id, session_metadata: updatedMeta } }
   },
 
@@ -622,8 +637,6 @@ export const interviewEngineService = {
     const spoken = nextQuestion.spoken_lead_in || nextQuestion.question_text
     await supabase.from('transcripts').insert({ interview_id: interview.id, speaker: 'AI', content: spoken, sequence: (lastTranscript?.[0]?.sequence || 0) + 1 })
     const packet = { type: 'ai_question', sessionId: session.id, eventId: `${session.id}-${nextQuestion.id}`, sequence: eventSequence + 1, questionSequence: nextSequence, question: nextQuestion, aiMessage: spoken, remainingSeconds: timeCheck.remainingSeconds, speakAloud: true, timestamp: new Date().toISOString() }
-    getVoiceGateway()?.broadcastToSession(session.id, packet)
-    getVoiceGateway()?.speakPromptToSession(session.id, spoken)
     return { isCompleted: false, sequence: nextSequence, nextQuestion, remainingSeconds: timeCheck.remainingSeconds, coverageMatrix: meta.coverage_matrix || [], session: { id: session.id, interview_id: interview.id, session_metadata: updatedMeta } }
   },
 
@@ -757,15 +770,6 @@ export const interviewEngineService = {
       const rawPrompt = activeQ?.question_text || activeQ?.prompt || ''
       const repeatLeadIn = `Sure, let me repeat that: ${rawPrompt}`
 
-      try {
-        const gateway = getVoiceGateway()
-        if (gateway) {
-          gateway.speakPromptToSession(session.id, repeatLeadIn, true)
-        }
-      } catch (voiceErr) {
-        console.warn('[InterviewEngine] Failed to deliver repeated prompt via voice gateway:', voiceErr.message)
-      }
-
       return {
         isRepeat: true,
         isCompleted: false,
@@ -840,18 +844,6 @@ export const interviewEngineService = {
         conflict.status = 409
         throw conflict
       }
-      getVoiceGateway()?.broadcastToSession(session.id, {
-        type: 'candidate_answer_committed',
-        sessionId: session.id,
-        eventId: answerId,
-        sequence: meta.event_sequence,
-        questionId: activeQuestion.id,
-        questionSequence: activeAnsweringSeq,
-        answerId,
-        answerText: answerText.trim(),
-        inputMode: inputMethod,
-        timestamp: answerCommit.committedAt,
-      })
     }
 
     // 6. Active Question & Criterion Resolution
@@ -930,16 +922,6 @@ export const interviewEngineService = {
     }
 
     const decisionEventSequence = (Number(meta.event_sequence) || 1) + 1
-    getVoiceGateway()?.broadcastToSession(session.id, {
-      type: 'ai_decision',
-      sessionId: session.id,
-      eventId: randomUUID(),
-      sequence: decisionEventSequence,
-      action: decision.action,
-      relationship: decision.relationship || null,
-      basedOnQuestionId: currentQuestion.id,
-      timestamp: new Date().toISOString(),
-    })
 
     if (decision.action === 'END_INTERVIEW') {
       return this._concludeSessionEarly({ interview, session, candidate, job, meta, token, reason: decision.completionReason })
@@ -1005,12 +987,6 @@ export const interviewEngineService = {
       timestamp: new Date().toISOString(),
     }
 
-    const gateway = getVoiceGateway()
-    if (gateway) {
-      gateway.broadcastToSession(session.id, questionEventPacket)
-      // Deliver spoken voice turn to candidate
-      gateway.speakPromptToSession(session.id, spokenPrompt)
-    }
 
     return {
       isCompleted: false,
@@ -1033,22 +1009,6 @@ export const interviewEngineService = {
   /**
    * Graceful conclusion when server time limit is reached
    */
-  _scheduleSessionDeadline({ interview, session, candidate, job, meta, token, endsAt }) {
-    const priorTimer = sessionDeadlineTimers.get(session.id)
-    if (priorTimer) clearTimeout(priorTimer)
-    const remainingMs = Math.max(0, new Date(endsAt).getTime() - Date.now())
-    const timer = setTimeout(async () => {
-      sessionDeadlineTimers.delete(session.id)
-      try {
-        await this._concludeSessionOnTimeLimit({ interview, session, candidate, job, meta, token })
-      } catch (error) {
-        console.error('[InterviewEngine] Failed to enforce session deadline:', error.message)
-      }
-    }, Math.min(remainingMs, 2_147_000_000))
-    timer.unref?.()
-    sessionDeadlineTimers.set(session.id, timer)
-  },
-
   async _concludeSessionOnTimeLimit({ interview, session, candidate, job, meta, token }) {
     const supabase = getServiceSupabaseClient()
     const { data: latestSession } = await supabase
@@ -1067,10 +1027,6 @@ export const interviewEngineService = {
     if (token) {
       await supabase.from('invitations').update({ status: 'COMPLETED' }).eq('token', token)
     }
-    const deadlineTimer = sessionDeadlineTimers.get(session.id)
-    if (deadlineTimer) clearTimeout(deadlineTimer)
-    sessionDeadlineTimers.delete(session.id)
-
     await supabase
       .from('interview_sessions')
       .update({
@@ -1102,11 +1058,6 @@ export const interviewEngineService = {
       timestamp: new Date().toISOString(),
     }
 
-    const gateway = getVoiceGateway()
-    if (gateway) {
-      gateway.broadcastToSession(session.id, completionPacket)
-      gateway.speakPromptToSession(session.id, closingMessage)
-    }
 
     return {
       isCompleted: true,
@@ -1130,9 +1081,6 @@ export const interviewEngineService = {
     const completedAt = new Date().toISOString()
     const closingMessage = `Thank you, ${candidate.full_name}. That concludes your technical assessment for the ${job.title} role. Your answers have been saved and forwarded to the hiring team.`
     const eventSequence = (Number(meta.event_sequence) || 0) + 2
-    const deadlineTimer = sessionDeadlineTimers.get(session.id)
-    if (deadlineTimer) clearTimeout(deadlineTimer)
-    sessionDeadlineTimers.delete(session.id)
     await supabase.from('interviews').update({ status: 'COMPLETED', completed_at: completedAt }).eq('id', interview.id)
     await supabase.from('interview_sessions').update({
       connection_state: 'DISCONNECTED',
@@ -1148,18 +1096,6 @@ export const interviewEngineService = {
       content: closingMessage,
       sequence: (lastTranscript?.[0]?.sequence || 0) + 1,
     })
-    const gateway = getVoiceGateway()
-    if (gateway) {
-      gateway.broadcastToSession(session.id, {
-        type: 'interview_completed', sessionId: session.id, eventId: randomUUID(), sequence: eventSequence,
-        reason: 'AI_COMPLETED', completionReason: reason || null, closingMessage,
-        remainingSeconds: adaptivePolicyService.validateTimeConstraints({
-          startedAt: meta.started_at, durationMinutes: meta.duration_minutes, endsAt: meta.ends_at,
-        }).remainingSeconds,
-        timestamp: completedAt,
-      })
-      gateway.speakPromptToSession(session.id, closingMessage)
-    }
     return {
       isCompleted: true, reason: 'AI_COMPLETED', closingMessage, nextQuestion: null,
       remainingSeconds: adaptivePolicyService.validateTimeConstraints({
@@ -1233,9 +1169,6 @@ export const interviewEngineService = {
       const { data: targetSessions } = await supabase
         .from('interview_sessions').select('id, session_metadata').eq('interview_id', targetInterviewId)
       for (const targetSession of targetSessions || []) {
-        const timer = sessionDeadlineTimers.get(targetSession.id)
-        if (timer) clearTimeout(timer)
-        sessionDeadlineTimers.delete(targetSession.id)
         const metadata = targetSession.session_metadata || {}
         const normalizedRating = feedbackRating === null || feedbackRating === '' || feedbackRating === undefined
           ? null

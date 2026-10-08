@@ -5,6 +5,7 @@ import { interviewEngineService } from '../interview/interviewEngineService.js'
 import { config } from '../../config/env.js'
 import { DEFAULT_VOICE_PROFILE, getVoiceProfile } from './voiceProfile.js'
 import { cleanTextForSpeech, segmentSpeech } from './speechSegmenter.js'
+import { normalizeTextForTTS } from './ttsTextNormalizer.js'
 import { ttsManager } from './providers/TTSManager.js'
 
 let _gatewayInstance = null
@@ -225,31 +226,143 @@ export class VoiceGateway {
         ctx.audioTurnSequence = (ctx.audioTurnSequence || 0) + 1
         ctx.audioTurnId = `${ctx.sessionId}-${ctx.audioTurnSequence}`
         ctx.currentAudioChunkIndex = 0
+        const audioTurnId = ctx.audioTurnId
+
         if (ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: 'ai_audio_started', sessionId: ctx.sessionId, audioTurnId: ctx.audioTurnId }))
+          ws.send(JSON.stringify({
+            type: 'ai_audio_started',
+            sessionId: ctx.sessionId,
+            audioTurnId,
+            questionSequence: ctx.currentQuestionSequence || 0,
+            questionId: ctx.activeQuestion?.id || null,
+            spokenPrompt: cleanPrompt,
+          }))
         }
 
+        // Standardized Voice Architecture: Multi-tier TTS Synthesis (CosyVoice 3 -> Gemini Live -> Kokoro)
+        const useNewTts = config.tts?.enableNewTts !== false
+        if (useNewTts) {
+          ctx.isAiSpeaking = true
+          ctx.hasEmittedTurnForCurrentInput = true
+          let streamedChunks = 0
+
+          try {
+            const synthResult = await ttsManager.synthesize({
+              text: cleanPrompt,
+              voiceProfile: ctx.voiceProfile || DEFAULT_VOICE_PROFILE,
+              timeoutMs: Math.max(60000, Math.ceil(cleanPrompt.length * 200)),
+              onTextDelta: (deltaText) => {
+                if (ctx.audioTurnId !== audioTurnId || ws.readyState !== 1) return
+                if (deltaText && !isThoughtOrMetaPlanning(deltaText)) {
+                  ws.send(JSON.stringify({
+                    type: 'ai_transcript_delta',
+                    text: deltaText,
+                    audioTurnId,
+                  }))
+                }
+              },
+              onChunk: (chunk) => {
+                // Reject chunks if audio turn was cancelled or interrupted
+                if (ctx.audioTurnId !== audioTurnId || ws.readyState !== 1) return
+                streamedChunks++
+                try {
+                  const validated = validatePcm16Chunk(chunk)
+                  ws.send(JSON.stringify({
+                    type: 'ai_audio_chunk',
+                    sessionId: ctx.sessionId,
+                    questionId: ctx.activeQuestion?.id || null,
+                    questionSequence: ctx.currentQuestionSequence || 0,
+                    audioTurnId,
+                    chunkIndex: chunk.chunkIndex || streamedChunks,
+                    audioSequence: chunk.chunkIndex || streamedChunks,
+                    data: validated.data,
+                    mimeType: validated.mimeType,
+                    sampleRate: validated.sampleRate,
+                    channels: validated.channels,
+                    bitDepth: validated.bitDepth,
+                    byteOrder: validated.byteOrder,
+                    diagnostics: validated.diagnostics,
+                    timestamp: Date.now(),
+                  }))
+                } catch (formatError) {
+                  streamedChunks--
+                  console.warn('[VoiceGateway] Dropping invalid PCM chunk:', formatError.message)
+                }
+              },
+            })
+
+            if (streamedChunks > 0 && ws.readyState === 1 && ctx.audioTurnId === audioTurnId) {
+              ctx.isAiSpeaking = false
+              ws.send(JSON.stringify({
+                type: 'ai_transcript_complete',
+                sessionId: ctx.sessionId,
+                audioTurnId,
+                eventId: `${ctx.sessionId}-voice-${Date.now()}`,
+                fullTranscript: cleanPrompt,
+                questionText: extractQuestionText(cleanPrompt) || cleanPrompt,
+                isNudge: isNudgeText(cleanPrompt),
+                isTermination: isTerminationText(cleanPrompt),
+                questionSequence: ctx.currentQuestionSequence || 0,
+                providerUsed: synthResult?.providerUsed || 'tts',
+              }))
+              ws.send(JSON.stringify({
+                type: 'ai_audio_stream_complete',
+                sessionId: ctx.sessionId,
+                audioTurnId,
+                isFallback: synthResult?.providerUsed !== 'cosyvoice',
+                providerUsed: synthResult?.providerUsed || 'tts',
+              }))
+              return
+            }
+          } catch (ttsErr) {
+            console.warn('[VoiceGateway] Multi-tier TTS synthesis error:', ttsErr.message)
+          }
+
+          // If chunks were already partially streamed to the client, NEVER restart with a duplicate turn.
+          // Complete the turn cleanly so candidate audio plays and microphone unlocks seamlessly.
+          if (streamedChunks > 0 && ws.readyState === 1 && ctx.audioTurnId === audioTurnId) {
+            ctx.isAiSpeaking = false
+            ws.send(JSON.stringify({
+              type: 'ai_transcript_complete',
+              sessionId: ctx.sessionId,
+              audioTurnId,
+              eventId: `${ctx.sessionId}-voice-${Date.now()}`,
+              fullTranscript: cleanPrompt,
+              questionText: extractQuestionText(cleanPrompt) || cleanPrompt,
+              isNudge: isNudgeText(cleanPrompt),
+              isTermination: isTerminationText(cleanPrompt),
+              questionSequence: ctx.currentQuestionSequence || 0,
+              providerUsed: 'partial_stream',
+            }))
+            ws.send(JSON.stringify({
+              type: 'ai_audio_stream_complete',
+              sessionId: ctx.sessionId,
+              audioTurnId,
+              isFallback: true,
+              providerUsed: 'partial_stream',
+            }))
+            return
+          }
+
+          // Fallback turn ONLY if zero chunks were streamed to candidate
+          if (ws.readyState === 1 && ctx.audioTurnId === audioTurnId) {
+            await this._deliverFallbackAudioOrTurn(ctx, cleanPrompt, ws)
+          }
+          return
+        }
+
+        // Legacy streaming path (only if ENABLE_NEW_TTS is explicitly false)
         const interviewerName = ctx.voiceProfile?.interviewerName || 'Sarah'
         const segments = segmentSpeech(cleanPrompt)
         const structuredText = segments.join('\n\n')
 
         const promptInstruction = segments.length > 1
           ? `Deliver the following interview message aloud to candidate ${ctx.candidateName}.
-Speak at a relaxed, measured pace with a warm, grounded pitch (do not rush or use a high-pitched, metallic, or flat robotic tone).
-Maintain consistent vocal warmth, natural conversational cadence, and engaging melody throughout, especially on the final sentence.
-Delivery instructions:
-- Speak slightly slower, at an unhurried, thoughtful tempo.
-- Pause naturally between sentences as a thoughtful human interviewer does.
-- Maintain full pitch variation, warm resonance, and vocal energy from the opening words through to the very last word.
-- Do not rush or flatten your intonation on the final sentence.
-- If the final sentence is a question, ask it with curious, inviting cadence.
-- Do not add any preamble, meta text, or commentary.
-
+Speak at a relaxed, measured pace with a warm, grounded pitch.
 Message to speak:
 ${structuredText}`
-          : `Speak the following message aloud directly to candidate ${ctx.candidateName} at a calm, unhurried pace with a warm, grounded pitch and conversational inflection (avoid rushed or high-pitched delivery): "${cleanPrompt}". Do NOT add any extra thoughts, preambles, or meta labels.`
+          : `Speak the following message aloud directly to candidate ${ctx.candidateName}: "${cleanPrompt}".`
 
-        // If geminiSession is not connected (e.g. idle timeout disconnected it), quickly reconnect
         if (!ctx.geminiSession && !ctx.isConnectingGemini) {
           try {
             await this._initGeminiLiveSession(ctx, ws)
@@ -258,13 +371,13 @@ ${structuredText}`
 
         if (ctx.geminiSession?.sendClientContent) {
           if (ctx.turnWatchdog) clearTimeout(ctx.turnWatchdog)
-          // 12-second watchdog: gives Gemini Live ample time to stream natural 24kHz audio
+          const watchdogTimeout = Math.max(60000, cleanPrompt.length * 200)
           ctx.turnWatchdog = setTimeout(async () => {
             if (!ctx.hasEmittedTurnForCurrentInput && ws.readyState === 1) {
-              console.warn(`[VoiceGateway] Gemini Live question speech timeout (12s). Attempting secondary voice synthesis...`)
+              console.warn(`[VoiceGateway] Gemini Live question speech timeout (${watchdogTimeout}ms). Attempting secondary voice synthesis...`)
               await this._deliverFallbackAudioOrTurn(ctx, cleanPrompt, ws)
             }
-          }, 12000)
+          }, watchdogTimeout)
 
           try {
             ctx.geminiSession.sendClientContent({
@@ -282,7 +395,6 @@ ${structuredText}`
             await this._deliverFallbackAudioOrTurn(ctx, cleanPrompt, ws)
           }
         } else {
-          // Gemini Live unavailable -> secondary TTS or resilient fallback turn
           await this._deliverFallbackAudioOrTurn(ctx, cleanPrompt, ws)
         }
       }

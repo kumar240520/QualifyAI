@@ -1,4 +1,11 @@
 import { candidateService } from '../services/candidateService.js'
+import {
+  assertValid,
+  validateAddCandidatePayload,
+  validateCreateInvitationPayload,
+  validateText,
+} from '../validators/index.js'
+import { ForbiddenError } from '../utils/errors.js'
 
 /**
  * Controller for Candidate Pipeline and Tokenized Invitation APIs
@@ -12,6 +19,10 @@ export const candidateController = {
       const jobId = req.params.id
       const organizationId = req.organizationId || req.tenant?.organizationId
       const userToken = req.token || req.accessToken
+
+      if (!organizationId) {
+        throw new ForbiddenError('Tenant organization context is missing.')
+      }
 
       const candidates = await candidateService.listCandidatesByJob({
         jobId,
@@ -36,12 +47,17 @@ export const candidateController = {
       const jobId = req.params.id
       const organizationId = req.organizationId || req.tenant?.organizationId
       const userToken = req.token || req.accessToken
-      const candidateData = req.body
+
+      if (!organizationId) {
+        throw new ForbiddenError('Tenant organization context is missing.')
+      }
+
+      const validated = assertValid(validateAddCandidatePayload(req.body))
 
       const candidate = await candidateService.addCandidate({
         jobId,
         organizationId,
-        candidateData,
+        candidateData: validated,
         userToken,
       })
 
@@ -63,18 +79,19 @@ export const candidateController = {
       const jobId = req.params.id
       const organizationId = req.organizationId || req.tenant?.organizationId
       const userToken = req.token || req.accessToken
-      const { candidateId, expiresInDays, interviewDurationMinutes } = req.body
 
-      if (!candidateId) {
-        return res.status(400).json({ success: false, error: 'candidateId is required.' })
+      if (!organizationId) {
+        throw new ForbiddenError('Tenant organization context is missing.')
       }
+
+      const validated = assertValid(validateCreateInvitationPayload(req.body))
 
       const invitation = await candidateService.createInvitation({
         jobId,
         organizationId,
-        candidateId,
-        expiresInDays,
-        interviewDurationMinutes,
+        candidateId: validated.candidateId,
+        expiresInDays: validated.expiresInDays,
+        interviewDurationMinutes: validated.interviewDurationMinutes,
         userToken,
       })
 
@@ -94,6 +111,8 @@ export const candidateController = {
   async getInvitationByToken(req, res, next) {
     try {
       const token = req.params.token
+      assertValid(validateText(token, 'Invitation token', { min: 8, max: 255, required: true }))
+
       const data = await candidateService.getInvitationByToken(token)
 
       return res.status(200).json({
@@ -101,10 +120,7 @@ export const candidateController = {
         data,
       })
     } catch (err) {
-      return res.status(404).json({
-        success: false,
-        error: err.message || 'Invitation not found or expired.',
-      })
+      next(err)
     }
   },
 
@@ -114,6 +130,8 @@ export const candidateController = {
   async acceptInvitation(req, res, next) {
     try {
       const token = req.params.token
+      assertValid(validateText(token, 'Invitation token', { min: 8, max: 255, required: true }))
+
       const candidateData = req.body?.candidateData || req.body || {}
       const result = await candidateService.acceptInvitation(token, candidateData)
 
@@ -123,10 +141,7 @@ export const candidateController = {
         data: result.invitation,
       })
     } catch (err) {
-      return res.status(400).json({
-        success: false,
-        error: err.message || 'Failed to accept invitation.',
-      })
+      next(err)
     }
   },
 }

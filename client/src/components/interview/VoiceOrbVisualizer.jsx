@@ -259,24 +259,23 @@ export default function VoiceOrbVisualizer({
       <div className="w-full flex flex-wrap items-center justify-center gap-2 pt-3 z-10 border-t border-slate-100">
         {/* Mic Toggle Button */}
         <button
-          onClick={conversationState === 'SPEAKING' ? undefined : onToggleMute}
-          disabled={conversationState === 'SPEAKING'}
+          onClick={onToggleMute}
           className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-2xs border cursor-pointer ${
             conversationState === 'SPEAKING'
-              ? 'bg-purple-50 text-purple-700 border-purple-200 opacity-90 cursor-not-allowed'
+              ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100 active:scale-[0.98]'
               : isMuted
-              ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 active:scale-[0.98]'
+              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 active:scale-[0.98]'
           }`}
           title={
             conversationState === 'SPEAKING'
-              ? 'Microphone is auto-muted while AI is speaking'
+              ? 'AI is speaking. Click to unmute and speak now'
               : isMuted
               ? 'Click to Unmute Microphone'
               : 'Click to Mute Microphone'
           }
         >
-          {isMuted ? (
+          {conversationState === 'SPEAKING' || isMuted ? (
             <>
               <MicOff className="w-3.5 h-3.5 text-rose-600" />
               <span>Unmute Mic</span>

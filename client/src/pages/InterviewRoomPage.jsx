@@ -19,6 +19,8 @@ import {
 import { interviewService } from '../services/interviewService.js'
 import { VoiceInterviewEngine } from '../services/voiceInterviewEngine.js'
 import { proctoringService } from '../services/proctoringService.js'
+import { VisualProctoringService } from '../services/visualProctoringService.js'
+import { normalizeApiError } from '../utils/errorNormalizer.js'
 import {
   normalizeQuestion,
   isThoughtOrMetaPlanning,
@@ -168,6 +170,9 @@ export default function InterviewRoomPage() {
   const [showFullscreenLockModal, setShowFullscreenLockModal] = useState(false)
   const [isTerminatedForViolations, setIsTerminatedForViolations] = useState(false)
   const proctoringTrackerRef = useRef(null)
+  const cameraPreviewRef = useRef(null)
+  const visualProctoringRef = useRef(null)
+  const [cameraStatus, setCameraStatus] = useState('Starting camera…')
 
   // Real-Time Voice Engine State
   const [voiceState, setVoiceState] = useState('CONNECTING')
@@ -177,6 +182,7 @@ export default function InterviewRoomPage() {
   const [liveAiSpeech, setLiveAiSpeech] = useState('')
   const [preventInterruption, setPreventInterruption] = useState(true)
   const voiceEngineRef = useRef(null)
+  const pendingAiSpeechRef = useRef(null)
   const autoSubmitTimerRef = useRef(null)
   const sessionRef = useRef(session)
   sessionRef.current = session
@@ -196,6 +202,100 @@ export default function InterviewRoomPage() {
   const lastTypingActivityTimeRef = useRef(0)
   const autoMutedForNonDescriptiveRef = useRef(false)
   const liveAiSpeechStreamRef = useRef('')
+  const targetSpokenScriptRef = useRef('')
+  const audioProgressActiveRef = useRef(false)
+  const scriptFallbackTickerRef = useRef(null)
+  const handoverScheduledRef = useRef(false)
+
+  const speakPendingAiPrompt = (engine = voiceEngineRef.current) => {
+    const pending = pendingAiSpeechRef.current
+    if (!pending || !engine?.hasEnteredRoom) return
+    pendingAiSpeechRef.current = null
+    engine.speakAiQuestion(pending.text)
+  }
+
+  // Progressively reveal spoken script synchronously with speech playback
+  const startScriptReveal = (script) => {
+    // Deduplication guard: if already revealing this exact script, preserve current progress
+    if (targetSpokenScriptRef.current === script && script) {
+      return
+    }
+
+    targetSpokenScriptRef.current = script || ''
+    setLiveAiSpeech('')
+    audioProgressActiveRef.current = false
+    handoverScheduledRef.current = false
+    if (scriptFallbackTickerRef.current) {
+      clearInterval(scriptFallbackTickerRef.current)
+      scriptFallbackTickerRef.current = null
+    }
+
+    if (!script) return
+    const clean = script
+      .replace(/^#+\s+/gm, '')
+      .replace(/\*\*.*?\*\*/g, '')
+      .replace(/^[A-Z\s]+:\s*/, '')
+      .trim()
+    const words = clean.split(/\s+/)
+    if (words.length === 0) return
+
+    // Fallback ticker: in case native audio stream is delayed or fails to connect,
+    // start revealing words progressively after a 6-second grace period rather than racing ahead of native audio.
+    let revealedIndex = 0
+    setTimeout(() => {
+      if (!audioProgressActiveRef.current && targetSpokenScriptRef.current === script && voiceStateRef.current === 'SPEAKING') {
+        revealedIndex = 1
+        setLiveAiSpeech(words.slice(0, 1).join(' '))
+        scriptFallbackTickerRef.current = setInterval(() => {
+          if (audioProgressActiveRef.current || targetSpokenScriptRef.current !== script || voiceStateRef.current !== 'SPEAKING') {
+            clearInterval(scriptFallbackTickerRef.current)
+            scriptFallbackTickerRef.current = null
+            return
+          }
+          revealedIndex = Math.min(words.length, revealedIndex + 1)
+          setLiveAiSpeech(words.slice(0, revealedIndex).join(' '))
+          if (revealedIndex >= words.length) {
+            clearInterval(scriptFallbackTickerRef.current)
+            scriptFallbackTickerRef.current = null
+            // Hand over mic to candidate after natural pause if audio progress is not driving
+            if (!audioProgressActiveRef.current && voiceStateRef.current === 'SPEAKING') {
+              setTimeout(() => {
+                if (targetSpokenScriptRef.current === script && voiceStateRef.current === 'SPEAKING') {
+                  concludeSpeakingAndPassMic()
+                }
+              }, 600)
+            }
+          }
+        }, 320)
+      }
+    }, 6000)
+  }
+
+  // Authoritatively pass the microphone to the candidate and unlock candidate answering turn
+  const concludeSpeakingAndPassMic = () => {
+    console.log('[InterviewRoom] AI speaking concluded. Passing microphone to candidate. Turn unlocked.')
+    isCandidateTurnLockedRef.current = false
+    handoverScheduledRef.current = false
+    voiceStateRef.current = 'LISTENING'
+    liveAiSpeechStreamRef.current = ''
+    audioProgressActiveRef.current = false
+    if (scriptFallbackTickerRef.current) {
+      clearInterval(scriptFallbackTickerRef.current)
+      scriptFallbackTickerRef.current = null
+    }
+    candidateSpeechBufferRef.current = ''
+    setCandidateInterimText('')
+    lastSpeechActivityTimeRef.current = 0
+    lastScheduledTextRef.current = ''
+
+    // Explicitly unmute candidate microphone and activate listening state
+    autoMutedForNonDescriptiveRef.current = false
+    setIsMuted(false)
+    if (voiceEngineRef.current) {
+      voiceEngineRef.current.unmuteAndStartListening()
+    }
+    setVoiceState('LISTENING')
+  }
 
   // 2-second warmup buffer after arriving in room before AI speaks
   const [roomStartupCountdown, setRoomStartupCountdown] = useState(2)
@@ -205,6 +305,7 @@ export default function InterviewRoomPage() {
   useEffect(() => {
     if (session?.interview_id && !isCompleted && !isTerminatedForViolations) {
       proctoringTrackerRef.current = proctoringService.createTracker(session.interview_id, {
+        token,
         maxWarnings: 3,
         onWarning: ({ count, maxWarnings, violation, message }) => {
           setWarningsCount(count)
@@ -242,6 +343,35 @@ export default function InterviewRoomPage() {
       }
     }
   }, [session?.interview_id, isCompleted, isTerminatedForViolations, token])
+
+  // MediaPipe processes camera frames on-device. Only sustained event metadata is sent to the API.
+  useEffect(() => {
+    if (!session?.interview_id || isCompleted || isTerminatedForViolations) return undefined
+    const visual = new VisualProctoringService({
+      video: cameraPreviewRef.current,
+      onStatus: ({ cameraReady, facePresent, degraded, message }) => {
+        setCameraStatus(degraded ? 'Camera analysis paused' : !cameraReady ? (message || 'Camera disconnected') : facePresent ? 'Camera active · face visible' : 'Camera active · center your face')
+      },
+      onEvent: (event) => {
+        proctoringTrackerRef.current?.triggerViolation(event.type, event.reason, event.severity, {
+          source: event.source,
+          confidence: event.confidence,
+          durationMs: event.durationMs,
+          timestamp: event.timestamp,
+          ...event.metadata,
+        })
+      },
+    })
+    visualProctoringRef.current = visual
+    visual.start().catch((error) => {
+      setCameraStatus(error.name === 'NotAllowedError' ? 'Camera permission blocked · retry access' : 'Camera unavailable · voice interview can continue')
+      console.warn('[InterviewRoom] Local camera setup notice:', error.message)
+    })
+    return () => {
+      visual.stop()
+      if (visualProctoringRef.current === visual) visualProctoringRef.current = null
+    }
+  }, [session?.interview_id, isCompleted, isTerminatedForViolations])
 
   // Fullscreen state listener: prompt modal if candidate exits fullscreen
   useEffect(() => {
@@ -326,6 +456,8 @@ export default function InterviewRoomPage() {
     // STRICT PACING GUARD: Lock candidate turn while AI presents the question!
     // The candidate cannot answer or auto-submit until AI finishes speaking!
     isCandidateTurnLockedRef.current = true
+    handoverScheduledRef.current = false
+    voiceStateRef.current = 'SPEAKING'
     setVoiceState('SPEAKING')
     setNudgeCount(0)
     setSilenceSeconds(0)
@@ -339,45 +471,21 @@ export default function InterviewRoomPage() {
       voiceEngineRef.current.resetCandidateSpeechRecognition()
     }
 
-    // Question-type microphone gating:
-    // ONLY descriptive, short-answer, and behavioral questions keep microphone unmuted.
-    // Multiple-choice, code, SQL, output, and boolean questions default microphone to MUTED!
-    const incomingType = normalized?.type || qObj?.type
-    const isVoiceType = isLongFormVoiceQuestion(incomingType)
-    if (!isVoiceType) {
-      console.log(`[InterviewRoom] Non-descriptive question (${incomingType}). Defaulting microphone to MUTED.`)
-      autoMutedForNonDescriptiveRef.current = true
-      if (voiceEngineRef.current) {
-        voiceEngineRef.current.setMute(true)
-      }
-      setIsMuted(true)
-    } else if (autoMutedForNonDescriptiveRef.current) {
-      console.log('[InterviewRoom] Transitioning to descriptive question. Restoring unmuted microphone.')
-      autoMutedForNonDescriptiveRef.current = false
-      if (voiceEngineRef.current) {
-        voiceEngineRef.current.setMute(false)
-      }
-      setIsMuted(false)
-    }
-
     // Deliver spoken lead-in if voice engine is active and speakAloud is requested
     const spokenLeadIn = qObj.spoken_lead_in || qText
-    setLiveAiSpeech(spokenLeadIn)
+    startScriptReveal(spokenLeadIn)
     liveAiSpeechStreamRef.current = ''
 
-    if (voiceEngineRef.current && spokenLeadIn && event.speakAloud !== false && !event.alreadyTriggeredOnServer) {
-      voiceEngineRef.current.speakAiQuestion(spokenLeadIn)
+    if (spokenLeadIn && event.speakAloud !== false) {
+      if (voiceEngineRef.current?.hasEnteredRoom) {
+        voiceEngineRef.current.speakAiQuestion(spokenLeadIn)
+      } else {
+        pendingAiSpeechRef.current = { text: spokenLeadIn, sequence: incomingSeq }
+      }
     } else if (event.speakAloud === false) {
       // If voice engine is explicitly not speaking aloud, unlock candidate after brief reading delay (1.5s)
       setTimeout(() => {
-        isCandidateTurnLockedRef.current = false
-        if (!isVoiceType) {
-          autoMutedForNonDescriptiveRef.current = true
-          if (voiceEngineRef.current) voiceEngineRef.current.setMute(true)
-          setIsMuted(true)
-        } else {
-          setVoiceState('LISTENING')
-        }
+        concludeSpeakingAndPassMic()
       }, 1500)
     }
   }
@@ -393,6 +501,7 @@ export default function InterviewRoomPage() {
     try {
       const data = await interviewService.startInterview(token)
       setSession(data.session)
+      setWarningsCount(Number(data.session?.warning_count) || 0)
       setTranscripts(data.transcripts || [])
       if (!data.currentQuestion && !data.isCompleted) {
         throw new Error('The interview session did not provide an active question.')
@@ -424,7 +533,7 @@ export default function InterviewRoomPage() {
           hydratedSeq
         )
         setActiveQuestion(normalized)
-        setLiveAiSpeech(data.currentQuestion?.spoken_lead_in || initialQ)
+        startScriptReveal(data.currentQuestion?.spoken_lead_in || initialQ)
         isCandidateTurnLockedRef.current = true
         setVoiceState('SPEAKING')
 
@@ -450,7 +559,8 @@ export default function InterviewRoomPage() {
       setIsCompleted(data.interview?.status === 'COMPLETED')
     } catch (err) {
       console.error('Failed to start interview:', err)
-      setError(err.message || 'Unable to connect to interview session.')
+      const normalized = normalizeApiError(err, 'Unable to connect to interview session. Please try again.')
+      setError(normalized.message)
     } finally {
       setIsLoading(false)
     }
@@ -512,6 +622,7 @@ export default function InterviewRoomPage() {
             )
             if (voiceEngineRef.current) {
               voiceEngineRef.current.markCandidateEnteredRoom()
+              speakPendingAiPrompt(voiceEngineRef.current)
             }
           }
           return next
@@ -649,7 +760,12 @@ export default function InterviewRoomPage() {
         return
       }
       if (result.nextQuestion) {
-        handleIncomingAiQuestion({ sequence: result.sequence, question: result.nextQuestion, remainingSeconds: result.remainingSeconds, speakAloud: true })
+        handleIncomingAiQuestion({
+          sequence: result.sequence,
+          question: result.nextQuestion,
+          remainingSeconds: result.remainingSeconds,
+          speakAloud: true,
+        })
       }
     } catch (err) {
       console.warn('Unable to continue after silence:', err.message)
@@ -788,7 +904,8 @@ export default function InterviewRoomPage() {
       setTranscripts((prev) => prev.filter((turn) => turn.id !== optimisticTurnId))
       setAnswerInputValue(answerText)
       if (inputMode === 'VOICE') setCandidateInterimText(answerText)
-      setError('I could not finish that response just now. Your answer is still here. Please try submitting it again.')
+      const normalized = normalizeApiError(err, 'We could not submit that response just now. Your answer has been preserved. Please try submitting again.')
+      setError(normalized.message)
       setVoiceState('LISTENING')
     } finally {
       setIsSubmitting(false)
@@ -833,7 +950,7 @@ export default function InterviewRoomPage() {
     setVoiceState('SPEAKING')
 
     const repeatPrompt = `Sure, let me repeat that: ${rawPrompt}`
-    setLiveAiSpeech(repeatPrompt)
+    startScriptReveal(repeatPrompt)
     liveAiSpeechStreamRef.current = ''
 
     setTranscripts((prev) => [
@@ -862,36 +979,33 @@ export default function InterviewRoomPage() {
           language: speechLanguage,
           onStateChange: (state) => setVoiceState(state),
           onAudioLevel: (level) => setAudioLevel(level),
-          onAiSpeakingConcluded: () => {
-            console.log('[InterviewRoom] AI speaking concluded. Candidate turn unlocked.')
-            isCandidateTurnLockedRef.current = false
-            setLiveAiSpeech('') // Clear temporary spoken banner so question is not written twice on panel!
-            liveAiSpeechStreamRef.current = ''
-            candidateSpeechBufferRef.current = ''
-            setCandidateInterimText('')
-            lastSpeechActivityTimeRef.current = 0
-            lastScheduledTextRef.current = ''
-
-            // Auto-mute candidate microphone on non-descriptive questions (e.g. MCQ, coding, output)
-            const currentQ = activeQuestionRef.current
-            const isVoiceQuestion = isLongFormVoiceQuestion(currentQ)
-            if (!isVoiceQuestion) {
-              console.log(`[InterviewRoom] Non-descriptive question (${currentQ?.type}). Auto-muting microphone by default.`)
-              autoMutedForNonDescriptiveRef.current = true
-              if (voiceEngineRef.current) {
-                voiceEngineRef.current.setMute(true)
-              }
-              setIsMuted(true)
-            } else {
-              if (autoMutedForNonDescriptiveRef.current) {
-                autoMutedForNonDescriptiveRef.current = false
-                if (voiceEngineRef.current) {
-                  voiceEngineRef.current.setMute(false)
-                }
-                setIsMuted(false)
-              }
-              setVoiceState('LISTENING')
+          onAiAudioStarted: (msg) => {
+            if (msg?.spokenPrompt) {
+              startScriptReveal(msg.spokenPrompt)
             }
+          },
+          onAiSpeechProgress: ({ progress }) => {
+            audioProgressActiveRef.current = true
+            if (scriptFallbackTickerRef.current) {
+              clearInterval(scriptFallbackTickerRef.current)
+              scriptFallbackTickerRef.current = null
+            }
+            const fullScript = targetSpokenScriptRef.current
+            if (!fullScript) return
+            const clean = fullScript
+              .replace(/^#+\s+/gm, '')
+              .replace(/\*\*.*?\*\*/g, '')
+              .replace(/^[A-Z\s]+:\s*/, '')
+              .trim()
+            const words = clean.split(/\s+/)
+            if (words.length === 0) return
+            const count = progress >= 0.98
+              ? words.length
+              : Math.min(words.length, Math.max(1, Math.ceil(progress * words.length)))
+            setLiveAiSpeech(words.slice(0, count).join(' '))
+          },
+          onAiSpeakingConcluded: () => {
+            concludeSpeakingAndPassMic()
           },
           onAiQuestion: (event) => {
             console.log('[InterviewRoom] Received authoritative ai_question via WebSocket:', event.sequence)
@@ -992,20 +1106,21 @@ export default function InterviewRoomPage() {
               if (!cleanText) return
 
               if (isDelta) {
-                // Accumulate streaming text tokens into liveAiSpeechStreamRef from fresh buffer
-                // NEVER append to prev (which already held spokenLeadIn and caused the duplication in the user screenshot)!
-                liveAiSpeechStreamRef.current = liveAiSpeechStreamRef.current
-                  ? `${liveAiSpeechStreamRef.current} ${cleanText}`
-                  : cleanText
-                setLiveAiSpeech(liveAiSpeechStreamRef.current)
+                // If no pre-known spoken script is active, accumulate stream and reveal progressively
+                if (!targetSpokenScriptRef.current) {
+                  liveAiSpeechStreamRef.current = liveAiSpeechStreamRef.current
+                    ? `${liveAiSpeechStreamRef.current} ${cleanText}`
+                    : cleanText
+                  startScriptReveal(liveAiSpeechStreamRef.current)
+                }
                 return
               }
 
               if (isFinal) {
                 setSilenceSeconds(0)
                 const finalText = cleanText || liveAiSpeechStreamRef.current
-                if (finalText) {
-                  setLiveAiSpeech(finalText)
+                if (finalText && !targetSpokenScriptRef.current && voiceStateRef.current === 'SPEAKING') {
+                  startScriptReveal(finalText)
                 }
                 liveAiSpeechStreamRef.current = ''
 
@@ -1041,6 +1156,7 @@ export default function InterviewRoomPage() {
           },
           onError: (err) => {
             console.warn('[Voice Mode Notice]:', err)
+            setError(`Interviewer voice unavailable: ${err?.message || err}`)
           },
         })
 
@@ -1055,6 +1171,7 @@ export default function InterviewRoomPage() {
 
           if (hasTriggeredInterviewStartRef.current) {
             preconnected.markCandidateEnteredRoom()
+            speakPendingAiPrompt(preconnected)
           }
         } else {
           if (preconnected) {
@@ -1071,12 +1188,17 @@ export default function InterviewRoomPage() {
           engine.start()
           if (hasTriggeredInterviewStartRef.current) {
             engine.markCandidateEnteredRoom()
+            speakPendingAiPrompt(engine)
           }
         }
       }
     }
 
     return () => {
+      if (scriptFallbackTickerRef.current) {
+        clearInterval(scriptFallbackTickerRef.current)
+        scriptFallbackTickerRef.current = null
+      }
       if (voiceEngineRef.current) {
         voiceEngineRef.current.stop()
         voiceEngineRef.current = null
@@ -1086,6 +1208,13 @@ export default function InterviewRoomPage() {
 
   const handleToggleMute = () => {
     autoMutedForNonDescriptiveRef.current = false
+    // If AI is currently speaking, toggling mute halts AI speech and immediately unlocks candidate mic and turn!
+    if (voiceStateRef.current === 'SPEAKING' || isCandidateTurnLockedRef.current) {
+      console.log('[InterviewRoom] Candidate clicked unmute during AI speech. Halting speech and passing mic immediately.')
+      concludeSpeakingAndPassMic()
+      return
+    }
+
     if (voiceEngineRef.current) {
       const muted = voiceEngineRef.current.toggleMute()
       if (!muted) voiceCaptureCancelledRef.current = false
@@ -1216,6 +1345,16 @@ export default function InterviewRoomPage() {
 
   return (
     <div className="h-screen w-screen bg-[#f8fafc] text-slate-900 flex flex-col overflow-hidden selection:bg-blue-600 selection:text-white">
+      {session?.interview_id && !isCompleted && !isTerminatedForViolations && (
+        <video
+          ref={cameraPreviewRef}
+          autoPlay
+          muted
+          playsInline
+          className="fixed bottom-5 right-5 z-50 h-24 w-36 rounded-xl object-cover -scale-x-100 shadow-xl ring-1 ring-black/10 sm:h-28 sm:w-40"
+          aria-label="Live local camera preview"
+        />
+      )}
       {/* 1. Header with Authoritative Countdown Timer & Monotonic Sequence */}
       <InterviewHeader
         jobTitle={job?.title ? `Role: ${job.title}` : 'Role: Technical Assessment'}
@@ -1534,14 +1673,28 @@ export default function InterviewRoomPage() {
                           </p>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        disabled
-                        className="px-4 py-2.5 rounded-xl bg-slate-200 text-slate-400 font-sans font-semibold text-xs cursor-not-allowed shrink-0 flex items-center justify-center gap-1.5"
-                      >
-                        <span>Submit Response</span>
-                        <Send className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            console.log('[InterviewRoom] Candidate clicked Ready to Speak.')
+                            concludeSpeakingAndPassMic()
+                          }}
+                          className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-blue-50 active:scale-[0.98] border border-blue-200 text-blue-700 font-sans font-semibold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+                          title="Unmute your microphone and start answering immediately"
+                        >
+                          <Mic className="w-3.5 h-3.5" />
+                          <span>Ready to Speak</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled
+                          className="px-4 py-2.5 rounded-xl bg-slate-200 text-slate-400 font-sans font-semibold text-xs cursor-not-allowed shrink-0 flex items-center justify-center gap-1.5"
+                        >
+                          <span>Submit Response</span>
+                          <Send className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ) : candidateInterimText ? (
                     <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-blue-50/95 via-indigo-50/90 to-sky-50/90 border border-blue-200/90 text-blue-950 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs animate-fade-in">

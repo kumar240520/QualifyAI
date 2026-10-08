@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { jobService } from '../../services/jobService.js'
 import JobCreationModal from './JobCreationModal.jsx'
+import { normalizeApiError } from '../../utils/errorNormalizer.js'
 
 export default function RequisitionsManager({ onSelectJob }) {
   const [jobs, setJobs] = useState([])
@@ -34,7 +35,8 @@ export default function RequisitionsManager({ onSelectJob }) {
       setJobs(data)
     } catch (err) {
       console.error('Error fetching jobs:', err)
-      setError(err.message || 'Failed to load requisitions.')
+      const normalized = normalizeApiError(err, 'Failed to load requisitions.')
+      setError(normalized.message)
     } finally {
       setIsLoading(false)
     }

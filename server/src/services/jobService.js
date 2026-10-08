@@ -1,5 +1,6 @@
 import { getSupabaseClient, getServiceSupabaseClient } from '../integrations/supabaseClient.js'
 import { aiOrchestrator } from '../integrations/ai/index.js'
+import { NotFoundError, ValidationError } from '../utils/errors.js'
 
 /**
  * Enterprise Job Requisition & JD Intelligence Service
@@ -39,7 +40,7 @@ export const jobService = {
       .single()
 
     if (error || !job) {
-      throw new Error('Job requisition not found or unauthorized.')
+      throw new NotFoundError('Job requisition not found or unauthorized.')
     }
 
     return job

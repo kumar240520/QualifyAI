@@ -1,14 +1,21 @@
 import { jobService } from '../services/jobService.js'
+import {
+  assertValid,
+  validateCreateJobPayload,
+  validateText,
+  validateUUID,
+} from '../validators/index.js'
+import { ForbiddenError, NotFoundError } from '../utils/errors.js'
 
 export const jobController = {
   /**
    * List jobs for current tenant organization
    */
-  async listJobs(req, res) {
+  async listJobs(req, res, next) {
     try {
-      const organizationId = req.tenant?.organizationId
+      const organizationId = req.tenant?.organizationId || req.organizationId
       if (!organizationId) {
-        return res.status(400).json({ success: false, error: 'Tenant context is missing.' })
+        throw new ForbiddenError('Tenant organization context is missing.')
       }
 
       const jobs = await jobService.listJobs({
@@ -18,17 +25,16 @@ export const jobController = {
 
       return res.status(200).json({ success: true, data: jobs })
     } catch (err) {
-      console.error('[JobController.listJobs] Error:', err.message)
-      return res.status(500).json({ success: false, error: err.message })
+      next(err)
     }
   },
 
   /**
    * Get job by ID
    */
-  async getJob(req, res) {
+  async getJob(req, res, next) {
     try {
-      const organizationId = req.tenant?.organizationId
+      const organizationId = req.tenant?.organizationId || req.organizationId
       const jobId = req.params.id
 
       const job = await jobService.getJobById({
@@ -37,75 +43,82 @@ export const jobController = {
         userToken: req.token,
       })
 
+      if (!job) {
+        throw new NotFoundError('Job requisition not found.')
+      }
+
       return res.status(200).json({ success: true, data: job })
     } catch (err) {
-      console.error('[JobController.getJob] Error:', err.message)
-      return res.status(404).json({ success: false, error: err.message })
+      next(err)
     }
   },
 
   /**
    * Create new job requisition
    */
-  async createJob(req, res) {
+  async createJob(req, res, next) {
     try {
-      const organizationId = req.tenant?.organizationId
+      const organizationId = req.tenant?.organizationId || req.organizationId
       const userId = req.user?.id
-      const { title, description, department, seniority } = req.body
 
-      if (!title || !description) {
-        return res.status(400).json({
-          success: false,
-          error: 'Title and description are required fields.',
-        })
+      if (!organizationId) {
+        throw new ForbiddenError('Tenant organization context is missing.')
       }
+
+      const validated = assertValid(validateCreateJobPayload(req.body))
 
       const job = await jobService.createJob({
         organizationId,
         userId,
-        title,
-        description,
-        department,
-        seniority,
+        title: validated.title,
+        description: validated.description,
+        department: validated.department,
+        seniority: validated.seniority,
         userToken: req.token,
       })
 
       return res.status(201).json({ success: true, data: job })
     } catch (err) {
-      console.error('[JobController.createJob] Error:', err.message)
-      return res.status(500).json({ success: false, error: err.message })
+      next(err)
     }
   },
 
   /**
    * Trigger AI parsing of raw JD
    */
-  async parseJobDescription(req, res) {
+  async parseJobDescription(req, res, next) {
     try {
-      const organizationId = req.tenant?.organizationId
+      const organizationId = req.tenant?.organizationId || req.organizationId
       const jobId = req.params.id
-      const { description } = req.body
+
+      const descRes = validateText(req.body?.description, 'Job description', {
+        min: 20,
+        max: 50000,
+        required: true,
+      })
+      if (!descRes.valid) {
+        assertValid(descRes, 'Please provide the job description content to parse.')
+      }
 
       const requirements = await jobService.parseJobDescription({
         jobId,
         organizationId,
-        descriptionText: description,
+        descriptionText: descRes.value,
         userToken: req.token,
       })
 
       return res.status(200).json({ success: true, data: requirements })
     } catch (err) {
-      console.error('[JobController.parseJobDescription] Error:', err.message)
-      return res.status(500).json({ success: false, error: err.message })
+      next(err)
     }
   },
 
   /**
    * Update / calibrate requirements
    */
-  async updateRequirements(req, res) {
+  async updateRequirements(req, res, next) {
     try {
-      const organizationId = req.tenant?.organizationId
+      const organizationId = req.tenant?.organizationId || req.organizationId
       const jobId = req.params.id
       const requirementsData = req.body
 
@@ -118,8 +131,7 @@ export const jobController = {
 
       return res.status(200).json({ success: true, data: updated })
     } catch (err) {
-      console.error('[JobController.updateRequirements] Error:', err.message)
-      return res.status(500).json({ success: false, error: err.message })
+      next(err)
     }
   },
 }

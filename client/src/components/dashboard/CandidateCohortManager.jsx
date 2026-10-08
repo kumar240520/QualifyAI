@@ -24,6 +24,8 @@ import {
 import { candidateService } from '../../services/candidateService.js'
 import { jobService } from '../../services/jobService.js'
 import EvaluationScorecardModal from '../evaluation/EvaluationScorecardModal.jsx'
+import { validateAddCandidate } from '../../utils/validators.js'
+import { normalizeApiError } from '../../utils/errorNormalizer.js'
 
 export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
   const [jobs, setJobs] = useState([])
@@ -62,6 +64,7 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
   const [inviteDurationMinutes, setInviteDurationMinutes] = useState(30)
   const [isSubmittingInvite, setIsSubmittingInvite] = useState(false)
   const [inviteModalError, setInviteModalError] = useState('')
+  const [inviteFieldErrors, setInviteFieldErrors] = useState({})
   const [generatedInviteLink, setGeneratedInviteLink] = useState('')
 
   // 1. Fetch available jobs
@@ -207,23 +210,58 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
   // Handle creating candidate and issuing invitation
   const handleSendInvite = async (e) => {
     e.preventDefault()
-    if (!inviteName.trim() || !inviteEmail.trim() || !activeJobId) {
-      setInviteModalError('Name and valid email are required.')
+
+    const validation = validateAddCandidate({
+      fullName: inviteName,
+      email: inviteEmail,
+      phone: invitePhone,
+    })
+
+    if (!validation.isValid) {
+      setInviteFieldErrors(validation.errors)
+      setInviteModalError('Please correct the highlighted candidate fields.')
       return
     }
 
-    setIsSubmittingInvite(true)
+    if (!activeJobId) {
+      setInviteModalError('Please select a job requisition before issuing an invitation.')
+      return
+    }
+
+    // 1. Proactive cohort duplicate check
+    const cleanEmail = inviteEmail.trim().toLowerCase()
+    const duplicateCandidate = candidates.find(
+      (c) => c.email && c.email.trim().toLowerCase() === cleanEmail
+    )
+    if (duplicateCandidate) {
+      const isAccepted = isCandidateAccepted(duplicateCandidate)
+      const isCompleted = isCandidateCompleted(duplicateCandidate)
+      let msg = 'This candidate email is already registered for this job requisition.'
+      if (isCompleted) {
+        msg = 'This candidate has already completed their assessment for this requisition.'
+      } else if (isAccepted) {
+        msg = 'This candidate has already accepted their invitation for this requisition.'
+      } else if (duplicateCandidate.invitation) {
+        msg = 'An active invitation has already been issued for this candidate email.'
+      }
+      setInviteFieldErrors({ email: msg })
+      setInviteModalError(msg)
+      return
+    }
+
+    setInviteFieldErrors({})
     setInviteModalError('')
+    setIsSubmittingInvite(true)
 
     try {
-      // 1. Add candidate
+      // 2. Add candidate
       const candidate = await candidateService.addCandidate(activeJobId, {
         fullName: inviteName.trim(),
-        email: inviteEmail.trim().toLowerCase(),
+        email: cleanEmail,
         phone: invitePhone.trim() || null,
       })
 
-      // 2. Generate secure tokenized invitation
+      // 3. Generate secure tokenized invitation
       const invitation = await candidateService.createInvitation(
         activeJobId,
         candidate.id,
@@ -238,7 +276,13 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
       fetchCandidates(activeJobId)
     } catch (err) {
       console.error('Error inviting candidate:', err)
-      setInviteModalError(err.message || 'Failed to invite candidate.')
+      const normalized = normalizeApiError(err, 'Failed to invite candidate. Please try again.')
+      setInviteModalError(normalized.message)
+      if (normalized.fields && Object.keys(normalized.fields).length > 0) {
+        setInviteFieldErrors(normalized.fields)
+      } else if (normalized.isDuplicate) {
+        setInviteFieldErrors({ email: normalized.message })
+      }
     } finally {
       setIsSubmittingInvite(false)
     }
@@ -250,6 +294,7 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
     setInviteEmail('')
     setInvitePhone('')
     setInviteModalError('')
+    setInviteFieldErrors({})
     setGeneratedInviteLink('')
   }
 
@@ -765,27 +810,54 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
                 )}
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Full Name *</label>
+                  <label className="text-xs font-semibold text-slate-700">Full Name <span className="text-red-500">*</span></label>
                   <input
                     type="text"
                     required
                     placeholder="e.g. Sarah Connor"
                     value={inviteName}
-                    onChange={(e) => setInviteName(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                    onChange={(e) => {
+                      setInviteName(e.target.value)
+                      if (inviteFieldErrors.fullName) {
+                        setInviteFieldErrors((prev) => ({ ...prev, fullName: null }))
+                      }
+                    }}
+                    className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
+                      inviteFieldErrors.fullName
+                        ? 'border-red-400 ring-2 ring-red-400/20'
+                        : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                    }`}
                   />
+                  {inviteFieldErrors.fullName && (
+                    <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.fullName}</p>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Email Address *</label>
+                  <label className="text-xs font-semibold text-slate-700">Email Address <span className="text-red-500">*</span></label>
                   <input
                     type="email"
                     required
                     placeholder="sarah@example.com"
                     value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                    onChange={(e) => {
+                      setInviteEmail(e.target.value)
+                      if (inviteFieldErrors.email) {
+                        setInviteFieldErrors((prev) => ({ ...prev, email: null }))
+                      }
+                      if (inviteModalError) {
+                        setInviteModalError('')
+                      }
+                    }}
+                    className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
+                      inviteFieldErrors.email
+                        ? 'border-red-400 ring-2 ring-red-400/20'
+                        : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                    }`}
                   />
+                  {inviteFieldErrors.email && (
+                    <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.email}</p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -795,9 +867,21 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
                       type="tel"
                       placeholder="+1 (555) 000-0000"
                       value={invitePhone}
-                      onChange={(e) => setInvitePhone(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition"
+                      onChange={(e) => {
+                        setInvitePhone(e.target.value)
+                        if (inviteFieldErrors.phone) {
+                          setInviteFieldErrors((prev) => ({ ...prev, phone: null }))
+                        }
+                      }}
+                      className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
+                        inviteFieldErrors.phone
+                          ? 'border-red-400 ring-2 ring-red-400/20'
+                          : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                      }`}
                     />
+                    {inviteFieldErrors.phone && (
+                      <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.phone}</p>
+                    )}
                   </div>
 
                   <div className="space-y-1.5">

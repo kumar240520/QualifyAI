@@ -7,6 +7,7 @@ import {
   ShieldAlert,
   AlertTriangle,
   Mic,
+  Camera,
   Clock,
   Briefcase,
   CheckCircle2,
@@ -25,6 +26,9 @@ import {
 } from 'lucide-react'
 import { candidateService } from '../services/candidateService.js'
 import { VoiceInterviewEngine } from '../services/voiceInterviewEngine.js'
+import { validateName, validatePhone } from '../utils/validators.js'
+import { normalizeApiError } from '../utils/errorNormalizer.js'
+import { VisualProctoringService } from '../services/visualProctoringService.js'
 
 /**
  * Modernized Candidate Assessment Onboarding & Staging Flow
@@ -54,6 +58,7 @@ export default function InvitationAcceptancePage() {
     recentCompany: '',
   })
   const [registerError, setRegisterError] = useState('')
+  const [candidateFieldErrors, setCandidateFieldErrors] = useState({})
 
   // Stage 2: Honor Code Agreement
   const [rulesAccepted, setRulesAccepted] = useState(false)
@@ -66,6 +71,10 @@ export default function InvitationAcceptancePage() {
   const [micTestError, setMicTestError] = useState('')
   const [isMicTesting, setIsMicTesting] = useState(false)
   const [audioCheckPassed, setAudioCheckPassed] = useState(false)
+  const [cameraCheckPassed, setCameraCheckPassed] = useState(false)
+  const [faceCheckPassed, setFaceCheckPassed] = useState(false)
+  const [isCameraTesting, setIsCameraTesting] = useState(false)
+  const [cameraStatusMessage, setCameraStatusMessage] = useState('Camera access and a clear face view are required.')
   const [fullscreenCheckPassed, setFullscreenCheckPassed] = useState(false)
   const [isReadyForAssessment, setIsReadyForAssessment] = useState(false)
   const audioContextRef = useRef(null)
@@ -74,6 +83,42 @@ export default function InvitationAcceptancePage() {
   const micStreamRef = useRef(null)
   const micRequestIdRef = useRef(0)
   const speechDetectedSinceRef = useRef(null)
+  const cameraVideoRef = useRef(null)
+  const visualProctoringRef = useRef(null)
+
+  const handleStartCameraTest = async () => {
+    visualProctoringRef.current?.stop()
+    setCameraCheckPassed(false)
+    setFaceCheckPassed(false)
+    setIsCameraTesting(true)
+    setCameraStatusMessage('Requesting camera and loading local face detection…')
+    try {
+      const checker = new VisualProctoringService({
+        video: cameraVideoRef.current,
+        onStatus: ({ cameraReady, facePresent, faceCount, degraded, message }) => {
+          setCameraCheckPassed(Boolean(cameraReady))
+          setFaceCheckPassed(Boolean(cameraReady && facePresent && faceCount === 1))
+          if (degraded) {
+            setCameraStatusMessage(message || 'Face detection is temporarily unavailable.')
+          } else if (cameraReady && faceCount === 1) {
+            setCameraStatusMessage('Camera and face detection passed. Video stays on this device.')
+          } else if (cameraReady && faceCount > 1) {
+            setCameraStatusMessage('Only one person should be visible in the camera.')
+          } else if (cameraReady) {
+            setCameraStatusMessage('Camera is on. Center your face in the preview to pass the face check.')
+          } else if (message) setCameraStatusMessage(message)
+        },
+      })
+      visualProctoringRef.current = checker
+      await checker.start()
+      setIsCameraTesting(false)
+    } catch (error) {
+      setIsCameraTesting(false)
+      setCameraCheckPassed(false)
+      setFaceCheckPassed(false)
+      setCameraStatusMessage(error.name === 'NotAllowedError' ? 'Allow camera access in your browser, then try again.' : error.message || 'Unable to start camera check.')
+    }
+  }
 
   // Stage 4: Modal & 5-4-3-2-1 Countdown + Gemini Voice Pre-Connect
   const [showLaunchModal, setShowLaunchModal] = useState(false)
@@ -109,7 +154,8 @@ export default function InvitationAcceptancePage() {
         }
       } catch (err) {
         console.error('Invitation verification error:', err)
-        setError(err.message || 'This invitation link is invalid or has expired.')
+        const normalized = normalizeApiError(err, 'This invitation link is invalid or has expired.')
+        setError(normalized.message)
       } finally {
         setIsLoading(false)
       }
@@ -277,7 +323,7 @@ export default function InvitationAcceptancePage() {
     }
   }
 
-  // Automatically start Mic Check & Full Screen when entering Stage 3
+  // Start hardware checks when entering the final onboarding step.
   useEffect(() => {
     if (currentStage === 3) {
       // 1. Request full screen automatically
@@ -291,10 +337,15 @@ export default function InvitationAcceptancePage() {
       if (!isMicTesting && !audioCheckPassed) {
         handleStartMicTest()
       }
+      if (!cameraCheckPassed && !isCameraTesting) handleStartCameraTest()
 
       const handleDeviceChange = () => refreshAudioInputDevices()
       navigator.mediaDevices?.addEventListener?.('devicechange', handleDeviceChange)
-      return () => navigator.mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange)
+      return () => {
+        navigator.mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange)
+        visualProctoringRef.current?.stop()
+        visualProctoringRef.current = null
+      }
     }
   }, [currentStage])
 
@@ -331,13 +382,14 @@ export default function InvitationAcceptancePage() {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
       if (audioContextRef.current) audioContextRef.current.close().catch(() => {})
       if (micStreamRef.current) micStreamRef.current.getTracks().forEach((t) => t.stop())
+      visualProctoringRef.current?.stop()
     }
   }, [])
 
-  // Both checks gate the assessment start
+  // All hardware checks gate the assessment start.
   useEffect(() => {
-    setIsReadyForAssessment(audioCheckPassed && fullscreenCheckPassed)
-  }, [audioCheckPassed, fullscreenCheckPassed])
+    setIsReadyForAssessment(audioCheckPassed && cameraCheckPassed && faceCheckPassed && fullscreenCheckPassed)
+  }, [audioCheckPassed, cameraCheckPassed, faceCheckPassed, fullscreenCheckPassed])
 
   // Countdown timer + Gemini Live Voice Engine Pre-Connect during countdown
   useEffect(() => {
@@ -538,7 +590,7 @@ export default function InvitationAcceptancePage() {
                 {[
                   { step: 1, title: 'Candidate Profile', desc: 'Verify identity & engineering background' },
                   { step: 2, title: 'Examination Rules', desc: 'Tab-switch lockdown & automatic detention policy' },
-                  { step: 3, title: 'Hardware Verification', desc: 'Live mic acoustic test & full-screen gate' },
+                  { step: 3, title: 'Hardware Verification', desc: 'Microphone, camera, face detection & fullscreen' },
                 ].map((s) => (
                   <div
                     key={s.step}
@@ -633,10 +685,22 @@ export default function InvitationAcceptancePage() {
                     <input
                       type="text"
                       value={candidateForm.fullName}
-                      onChange={(e) => setCandidateForm({ ...candidateForm, fullName: e.target.value })}
+                      onChange={(e) => {
+                        setCandidateForm({ ...candidateForm, fullName: e.target.value })
+                        if (candidateFieldErrors.fullName) {
+                          setCandidateFieldErrors((prev) => ({ ...prev, fullName: null }))
+                        }
+                      }}
                       placeholder="e.g. Devon Kaelen"
-                      className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
+                      className={`w-full h-11 px-3.5 bg-slate-50 border rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none transition ${
+                        candidateFieldErrors.fullName
+                          ? 'border-rose-400 ring-2 ring-rose-400/20'
+                          : 'border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
+                      }`}
                     />
+                    {candidateFieldErrors.fullName && (
+                      <p className="mt-1 text-xs text-rose-600 font-medium">{candidateFieldErrors.fullName}</p>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -658,10 +722,22 @@ export default function InvitationAcceptancePage() {
                     <input
                       type="tel"
                       value={candidateForm.phone}
-                      onChange={(e) => setCandidateForm({ ...candidateForm, phone: e.target.value })}
+                      onChange={(e) => {
+                        setCandidateForm({ ...candidateForm, phone: e.target.value })
+                        if (candidateFieldErrors.phone) {
+                          setCandidateFieldErrors((prev) => ({ ...prev, phone: null }))
+                        }
+                      }}
                       placeholder="+91 9876543210"
-                      className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
+                      className={`w-full h-11 px-3.5 bg-slate-50 border rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none transition ${
+                        candidateFieldErrors.phone
+                          ? 'border-rose-400 ring-2 ring-rose-400/20'
+                          : 'border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
+                      }`}
                     />
+                    {candidateFieldErrors.phone && (
+                      <p className="mt-1 text-xs text-rose-600 font-medium">{candidateFieldErrors.phone}</p>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -715,10 +791,20 @@ export default function InvitationAcceptancePage() {
                 </span>
                 <button
                   onClick={() => {
-                    if (!candidateForm.fullName.trim()) {
-                      setRegisterError('Please enter your full legal name before proceeding.')
+                    const errors = {}
+                    const nameRes = validateName(candidateForm.fullName, 'Full Legal Name', { min: 2, max: 100 })
+                    if (!nameRes.valid) errors.fullName = nameRes.error
+
+                    const phoneRes = validatePhone(candidateForm.phone, { required: true })
+                    if (!phoneRes.valid) errors.phone = phoneRes.error
+
+                    if (Object.keys(errors).length > 0) {
+                      setCandidateFieldErrors(errors)
+                      setRegisterError('Please correct the highlighted fields before proceeding.')
                       return
                     }
+
+                    setCandidateFieldErrors({})
                     setRegisterError('')
                     setCurrentStage(2)
                   }}
@@ -944,7 +1030,7 @@ export default function InvitationAcceptancePage() {
                   </p>
                 </div>
 
-                {/* The Two Mandatory Verification Checks with Generous Spacing */}
+                {/* Voice, local camera/face detection, and fullscreen checks */}
                 <div className="space-y-6">
                   {/* Check 1: Real Live Microphone Audio Check */}
                   <div
@@ -1052,7 +1138,38 @@ export default function InvitationAcceptancePage() {
                     </div>
                   </div>
 
-                  {/* Check 2: Full Screen / Tab Switch Lockdown Check */}
+                  {/* Check 2: Local camera and face detection */}
+                  <div className={`p-5 sm:p-6 rounded-2xl border transition-all ${cameraCheckPassed && faceCheckPassed ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950' : 'bg-slate-50/70 border-slate-200'}`}>
+                    <div className="flex items-center justify-between gap-4 mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${cameraCheckPassed && faceCheckPassed ? 'bg-emerald-600 text-white' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
+                          <Camera className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs sm:text-sm font-bold flex items-center gap-2">
+                            <span>Check 2: Camera & Face Detection</span>
+                            {cameraCheckPassed && faceCheckPassed && <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">VERIFIED ✓</span>}
+                          </div>
+                          <div className="text-xs text-slate-500 mt-0.5">Camera frames are analyzed locally and are not recorded or uploaded.</div>
+                        </div>
+                      </div>
+                      <button type="button" onClick={handleStartCameraTest} disabled={isCameraTesting} className="shrink-0 px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                        {isCameraTesting ? 'Checking…' : cameraCheckPassed ? 'Restart check' : 'Start camera'}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-[220px_1fr] gap-4 items-center">
+                      <div className="aspect-video overflow-hidden rounded-xl border border-slate-300 bg-slate-950">
+                        <video ref={cameraVideoRef} autoPlay muted playsInline className="h-full w-full object-cover -scale-x-100" aria-label="Local camera preview" />
+                      </div>
+                      <div className="space-y-2 text-xs">
+                        <div className="flex items-center gap-2 text-slate-700"><span className={`h-2 w-2 rounded-full ${cameraCheckPassed ? 'bg-emerald-500' : 'bg-slate-300'}`} />Camera access {cameraCheckPassed ? 'ready' : 'needed'}</div>
+                        <div className="flex items-center gap-2 text-slate-700"><span className={`h-2 w-2 rounded-full ${faceCheckPassed ? 'bg-emerald-500' : 'bg-slate-300'}`} />One face centered {faceCheckPassed ? 'detected' : 'not detected yet'}</div>
+                        <p className="text-slate-500 leading-relaxed" aria-live="polite">{cameraStatusMessage}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Check 3: Full Screen / Tab Switch Lockdown Check */}
                   <div
                     className={`p-5 sm:p-6 rounded-2xl border transition-all ${
                       fullscreenCheckPassed
@@ -1071,7 +1188,7 @@ export default function InvitationAcceptancePage() {
                         </div>
                         <div>
                           <div className="text-xs sm:text-sm font-bold flex items-center gap-2">
-                            <span>Check 2: Full Screen Tab Lockdown</span>
+                            <span>Check 3: Full Screen Tab Lockdown</span>
                             {fullscreenCheckPassed && (
                               <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                                 ACTIVE ✓
@@ -1106,12 +1223,12 @@ export default function InvitationAcceptancePage() {
                   {isReadyForAssessment ? (
                     <span className="text-emerald-700 font-bold flex items-center justify-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      <span>Both checks verified! You are ready to launch your official assessment.</span>
+                      <span>All hardware checks passed. You are ready to launch your official assessment.</span>
                     </span>
                   ) : (
                     <span className="text-amber-800 font-medium flex items-center justify-center gap-1.5">
                       <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>Complete both Microphone Check and Full Screen Check to enable Start Assessment below.</span>
+                      <span>Complete microphone, camera, face detection, and fullscreen checks to enable Start Assessment.</span>
                     </span>
                   )}
                 </div>

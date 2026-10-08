@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { getSupabaseClient, getServiceSupabaseClient } from '../integrations/supabaseClient.js'
+import { NotFoundError, ForbiddenError, ValidationError, DuplicateResourceError } from '../utils/errors.js'
 
 /**
  * Enterprise Candidate & Invitation Management Domain Service
@@ -17,9 +18,7 @@ export const candidateService = {
       .single()
 
     if (error || !job) {
-      const err = new Error('Job requisition not found or unauthorized.')
-      err.status = 404
-      throw err
+      throw new NotFoundError('Job requisition not found or unauthorized.')
     }
     return job
   },
@@ -189,50 +188,89 @@ export const candidateService = {
 
     const { email, fullName, phone, resumeUrl } = candidateData || {}
     if (!email || !email.includes('@')) {
-      throw new Error('Valid candidate email is required.')
+      throw new ValidationError({ email: 'Valid candidate email is required.' }, 'Valid candidate email is required.')
     }
     if (!fullName || fullName.trim().length < 2) {
-      throw new Error('Candidate full name is required.')
+      throw new ValidationError({ fullName: 'Candidate full name is required.' }, 'Candidate full name is required.')
     }
 
     const cleanEmail = email.trim().toLowerCase()
     const cleanName = fullName.trim()
 
-    // 1. Upsert candidate profile
-    const { data: candidate, error: candidateError } = await supabase
+    // 1. Check if candidate with this email is already registered in the organization
+    const { data: existingCandidates } = await supabase
       .from('candidates')
-      .upsert(
-        {
+      .select('id, email, full_name, phone')
+      .eq('organization_id', organizationId)
+      .eq('email', cleanEmail)
+
+    const existingCandidate = existingCandidates?.[0] || null
+
+    if (existingCandidate) {
+      // Check if candidate is already associated with this job requisition
+      const { data: existingApp } = await supabase
+        .from('applications')
+        .select('id, status')
+        .eq('job_id', jobId)
+        .eq('candidate_id', existingCandidate.id)
+        .maybeSingle()
+
+      if (existingApp) {
+        throw new DuplicateResourceError(
+          'email',
+          'This candidate email is already registered for this job requisition.'
+        )
+      }
+    }
+
+    // 2. Insert or retrieve candidate profile
+    let candidate = existingCandidate
+    if (!candidate) {
+      const { data: created, error: candidateError } = await supabase
+        .from('candidates')
+        .insert({
           organization_id: organizationId,
           email: cleanEmail,
           full_name: cleanName,
           phone: phone?.trim() || null,
           resume_url: resumeUrl?.trim() || null,
-        },
-        { onConflict: 'organization_id,email' }
-      )
-      .select()
-      .single()
+        })
+        .select()
+        .single()
 
-    if (candidateError || !candidate) {
-      throw new Error(`Failed to save candidate: ${candidateError?.message}`)
+      if (candidateError || !created) {
+        if (/duplicate|uq_org_candidate_email|23505/i.test(candidateError?.message)) {
+          throw new DuplicateResourceError('email', 'This candidate email is already registered in your organization talent pool.')
+        }
+        throw new Error(`Failed to save candidate: ${candidateError?.message}`)
+      }
+      candidate = created
+    } else {
+      // Keep candidate name / contact updated if amended
+      await supabase
+        .from('candidates')
+        .update({
+          full_name: cleanName,
+          phone: phone?.trim() || candidate.phone || null,
+        })
+        .eq('id', candidate.id)
     }
 
-    // 2. Link candidate to job via applications table
+    // 3. Link candidate to job via applications table
     const { data: application, error: appError } = await supabase
       .from('applications')
-      .upsert(
-        {
-          job_id: jobId,
-          candidate_id: candidate.id,
-          status: 'APPLIED',
-        },
-        { onConflict: 'job_id,candidate_id' }
-      )
+      .insert({
+        job_id: jobId,
+        candidate_id: candidate.id,
+        status: 'APPLIED',
+      })
       .select()
       .single()
 
     if (appError) {
+      if (/duplicate|uq_job_candidate|23505/i.test(appError.message)) {
+        throw new DuplicateResourceError('email', 'This candidate email is already registered for this job requisition.')
+      }
       throw new Error(`Failed to associate candidate with job: ${appError.message}`)
     }
 
@@ -255,13 +293,17 @@ export const candidateService = {
     const expiresAt = new Date(Date.now() + (Number(expiresInDays) || 7) * 24 * 60 * 60 * 1000).toISOString()
     const durationMinutes = Math.min(180, Math.max(5, Number(interviewDurationMinutes) || 30))
 
-    // Upsert invitation (replace previous invitation if any for this job/candidate)
+    // Check existing invitation status
     const { data: existing } = await supabase
       .from('invitations')
-      .select('id')
+      .select('id, status, token')
       .eq('job_id', jobId)
       .eq('candidate_id', candidateId)
       .maybeSingle()
+
+    if (existing?.status === 'COMPLETED') {
+      throw new DuplicateResourceError('email', 'This candidate has already completed their assessment for this requisition.')
+    }
 
     let invitation
     if (existing?.id) {
@@ -311,8 +353,8 @@ export const candidateService = {
    * Public: Retrieve and verify invitation by cryptographic token
    */
   async getInvitationByToken(token) {
-    if (!token || token.length < 10) {
-      throw new Error('Invalid invitation token.')
+    if (!token || token.length < 8) {
+      throw new ValidationError({ token: 'Invalid invitation token.' }, 'Invalid invitation token.')
     }
 
     const supabase = getServiceSupabaseClient()
@@ -353,17 +395,17 @@ export const candidateService = {
       .maybeSingle()
 
     if (error || !invitation) {
-      throw new Error('Invitation not found or has expired.')
+      throw new NotFoundError('Invitation not found or has expired.')
     }
 
     if (invitation.status === 'COMPLETED' || invitation.status === 'CANCELLED' || invitation.status === 'TERMINATED') {
-      throw new Error('This single-use assessment session has already been completed and concluded. Re-access is terminated.')
+      throw new ForbiddenError('This single-use assessment session has already been completed and concluded. Re-access is terminated.')
     }
 
     // Check expiration
     if (new Date(invitation.expires_at) < new Date()) {
       await supabase.from('invitations').update({ status: 'EXPIRED' }).eq('id', invitation.id)
-      throw new Error('This invitation link has expired. Please contact the recruiting team.')
+      throw new ForbiddenError('This invitation link has expired. Please contact the recruiting team.')
     }
 
     // Update status to OPENED if newly received
@@ -407,7 +449,7 @@ export const candidateService = {
    * Public: Candidate confirms readiness and accepts invitation
    */
   async acceptInvitation(token, candidateData = {}) {
-    if (!token) throw new Error('Token is required.')
+    if (!token) throw new ValidationError({ token: 'Token is required.' }, 'Token is required.')
 
     const supabase = getServiceSupabaseClient()
 
@@ -418,11 +460,11 @@ export const candidateService = {
       .maybeSingle()
 
     if (error || !invitation) {
-      throw new Error('Invitation not found.')
+      throw new NotFoundError('Invitation not found.')
     }
 
     if (new Date(invitation.expires_at) < new Date()) {
-      throw new Error('Invitation link has expired.')
+      throw new ForbiddenError('Invitation link has expired.')
     }
 
     const { data: updated, error: updateError } = await supabase

@@ -4,14 +4,14 @@ export const proctoringService = {
   /**
    * Batch ingest proctoring events
    */
-  async recordEvents(interviewId, events) {
-    if (!interviewId || !events || events.length === 0) return null
+  async recordEvents(interviewId, token, events) {
+    if (!interviewId || !token || !events || events.length === 0) return null
 
     try {
       const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/proctoring/events`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ events }),
+        body: JSON.stringify({ token, events }),
       })
       const data = await res.json()
       return data.data
@@ -45,39 +45,72 @@ export const proctoringService = {
    * - Developer Tools & Right-Click Context Menu Blocking
    * - Automatic termination callback upon reaching maxWarnings (5)
    */
-  createTracker(interviewId, { onWarning, onTerminate, maxWarnings = 3 } = {}) {
+  createTracker(interviewId, { token, onWarning, onTerminate, maxWarnings = 3 } = {}) {
     let buffer = []
     let flushInterval = null
     let blurStartTime = null
     let warningsCount = 0
     let isTerminated = false
+    let flushInFlight = null
     const warningsHistory = []
     const lastViolationTimestamps = {}
 
-    const recordEvent = (eventType, severity = 'LOW', metadata = {}) => {
-      // Map eventType to allowed Postgres CHECK constraint types:
-      // ('FOCUS_LOSS', 'TAB_SWITCH', 'VISIBILITY_CHANGE', 'ACOUSTIC_ANOMALY')
-      let dbEventType = eventType
-      if (!['FOCUS_LOSS', 'TAB_SWITCH', 'VISIBILITY_CHANGE', 'ACOUSTIC_ANOMALY'].includes(eventType)) {
-        dbEventType = 'FOCUS_LOSS'
-      }
-
+    const recordEvent = (eventType, severity = 'LOW', metadata = {}, isWarning = false) => {
       buffer.push({
-        event_type: dbEventType,
+        event_id: crypto.randomUUID(),
+        event_type: eventType,
         severity,
+        is_warning: isWarning,
         metadata: {
           ...metadata,
-          original_event_type: eventType,
         },
         timestamp_ms: Date.now(),
       })
     }
 
     const flush = async () => {
-      if (buffer.length === 0 || !interviewId) return
-      const batch = [...buffer]
-      buffer = []
-      await proctoringService.recordEvents(interviewId, batch)
+      if (flushInFlight) return flushInFlight
+      if (buffer.length === 0 || !interviewId || !token) return null
+      const batch = buffer.splice(0)
+      flushInFlight = (async () => {
+        const result = await proctoringService.recordEvents(interviewId, token, batch)
+        if (!result) {
+          buffer.unshift(...batch)
+          return null
+        }
+        if (Number.isFinite(Number(result.warningCount))) warningsCount = Number(result.warningCount)
+        for (const warning of result.warnings || []) {
+          const sourceEvent = batch.find((item) => item.event_id === warning.eventId)
+          const violationRecord = {
+            id: warning.eventId || `warn-${Date.now()}-${warning.count}`,
+            warningNumber: warning.count,
+            maxWarnings,
+            type: warning.type,
+            reason: warning.reason,
+            severity: warning.severity,
+            timestamp: new Date().toISOString(),
+            metadata: sourceEvent?.metadata || {},
+          }
+          warningsHistory.push(violationRecord)
+          onWarning?.({
+            count: warning.count,
+            maxWarnings,
+            violation: violationRecord,
+            message: `Warning ${warning.count} of ${maxWarnings}: ${warning.reason}`,
+          })
+        }
+        if (result.terminated && !isTerminated) {
+          isTerminated = true
+          onTerminate?.({
+            reason: `Maximum warning threshold reached (${warningsCount}/${maxWarnings}).`,
+            count: warningsCount,
+            maxWarnings,
+            history: [...warningsHistory],
+          })
+        }
+        return result
+      })().finally(() => { flushInFlight = null })
+      return flushInFlight
     }
 
     const triggerViolation = (type, reason, severity = 'MEDIUM', meta = {}) => {
@@ -91,52 +124,13 @@ export const proctoringService = {
       }
       lastViolationTimestamps[type] = now
 
-      warningsCount += 1
-      const violationRecord = {
-        id: `warn-${now}-${warningsCount}`,
-        warningNumber: warningsCount,
-        maxWarnings,
-        type,
-        reason,
-        severity,
-        timestamp: new Date().toISOString(),
-        metadata: meta,
-      }
-      warningsHistory.push(violationRecord)
-
-      // Map to db telemetry
-      const dbType = type === 'TAB_SWITCH' ? 'TAB_SWITCH' : 'FOCUS_LOSS'
-      recordEvent(dbType, severity, {
+      recordEvent(type, severity, {
         violationType: type,
         reason,
-        warningNumber: warningsCount,
         maxWarnings,
         ...meta,
-      })
-
-      // Dispatch warning to UI callback
-      if (onWarning) {
-        onWarning({
-          count: warningsCount,
-          maxWarnings,
-          violation: violationRecord,
-          message: `Warning ${warningsCount} of ${maxWarnings}: ${reason}`,
-        })
-      }
-
-      // Check if maximum security threshold is reached
-      if (warningsCount >= maxWarnings) {
-        isTerminated = true
-        if (onTerminate) {
-          onTerminate({
-            reason: `Maximum warning threshold reached (${warningsCount}/${maxWarnings}).`,
-            count: warningsCount,
-            maxWarnings,
-            history: [...warningsHistory],
-          })
-        }
-        flush()
-      }
+      }, true)
+      void flush()
     }
 
     // 1. Tab switch / Visibility change
@@ -158,6 +152,8 @@ export const proctoringService = {
 
     // 2. Window Blur (clicking outside browser or multi-monitor focus loss)
     const handleWindowBlur = () => {
+      // A hidden tab already records TAB_SWITCH. Avoid counting the same action again as focus loss.
+      if (document.hidden) return
       triggerViolation('FOCUS_LOSS', 'Assessment window lost focus. Keep the window active.', 'MEDIUM', {
         userAgent: navigator.userAgent,
       })
@@ -279,7 +275,7 @@ export const proctoringService = {
 
     return {
       recordAcousticAnomaly: (decibelLevel) => {
-        recordEvent('ACOUSTIC_ANOMALY', 'MEDIUM', { decibelLevel })
+      recordEvent('ACOUSTIC_ANOMALY', 'MEDIUM', { decibelLevel }, false)
       },
       triggerViolation,
       getWarningsCount: () => warningsCount,

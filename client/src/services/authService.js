@@ -28,7 +28,10 @@ export const authService = {
       const data = await res.json()
 
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to create account.')
+        return {
+          success: false,
+          error: data.error || 'Failed to create account.',
+        }
       }
 
       // If backend returned a session with tokens, sync with Supabase client
@@ -46,7 +49,7 @@ export const authService = {
         message: data.data.message,
       }
     } catch (apiErr) {
-      // Fallback directly to Supabase client if backend gateway is unavailable
+      // Fallback directly to Supabase client ONLY if backend gateway is completely unreachable (Network Error)
       console.warn('[authService.signup] Backend API unreachable, falling back to direct Supabase auth:', apiErr.message)
 
       const { data, error } = await supabase.auth.signUp({

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { evaluationService } from '../../services/evaluationService.js'
 import { proctoringService } from '../../services/proctoringService.js'
+import { normalizeApiError } from '../../utils/errorNormalizer.js'
 
 const EVAL_STEPS = [
   {
@@ -92,7 +93,8 @@ export default function EvaluationScorecardModal({
       }
     } catch (err) {
       console.warn('[EvaluationScorecardModal] Failed to load evaluation:', err.message)
-      setError(err.message)
+      const normalized = normalizeApiError(err, 'Failed to load evaluation scorecard.')
+      setError(normalized.message)
     } finally {
       setLoading(false)
     }
@@ -130,7 +132,8 @@ export default function EvaluationScorecardModal({
       }
     } catch (err) {
       console.error('[EvaluationScorecardModal] Evaluation trigger failed:', err)
-      setError(err.message || 'Failed to synthesize evaluation.')
+      const normalized = normalizeApiError(err, 'Failed to synthesize candidate evaluation with AI.')
+      setError(normalized.message)
     } finally {
       setEvaluating(false)
     }

@@ -34,10 +34,15 @@ test('Speech Segmenter protects abbreviations and technical tokens from improper
 })
 
 test('Voice Profiles correctly configure natural human recruiter voices', () => {
-  assert.equal(DEFAULT_VOICE_PROFILE.id, 'sarah_recruiter')
-  assert.equal(DEFAULT_VOICE_PROFILE.geminiVoice, 'Aoede', 'Sarah uses Aoede (top warm natural voice)')
-  assert.equal(DEFAULT_VOICE_PROFILE.kokoroVoice, 'af_heart', 'Sarah uses af_heart for Kokoro')
+  assert.equal(DEFAULT_VOICE_PROFILE.id, 'qualifyai_interviewer_01')
+  assert.equal(DEFAULT_VOICE_PROFILE.language, 'en-IN')
+  assert.equal(DEFAULT_VOICE_PROFILE.cosyvoiceSpeaker, 'qualifyai_interviewer_01')
   assert.equal('sampleRate' in DEFAULT_VOICE_PROFILE, false, 'The voice profile does not hardcode runtime audio format metadata')
+
+  const sarah = getVoiceProfile('sarah_recruiter')
+  assert.equal(sarah.interviewerName, 'Sarah')
+  assert.equal(sarah.geminiVoice, 'Aoede', 'Sarah uses Aoede')
+  assert.equal(sarah.kokoroVoice, 'af_heart', 'Sarah uses af_heart for Kokoro')
 
   const michael = getVoiceProfile('michael_recruiter')
   assert.equal(michael.interviewerName, 'Michael')
@@ -45,7 +50,7 @@ test('Voice Profiles correctly configure natural human recruiter voices', () => 
   assert.equal(michael.gender, 'male')
 
   const fallback = getVoiceProfile('unknown_profile')
-  assert.equal(fallback.id, 'sarah_recruiter', 'Unknown profile falls back to Sarah')
+  assert.equal(fallback.id, 'qualifyai_interviewer_01', 'Unknown profile falls back to primary interviewer')
 })
 
 test('TTSManager coordinates fallback chain across providers', async () => {

@@ -11,9 +11,10 @@ export class GeminiProvider extends AIProvider {
     this.client = null
     this.fallbackModels = [
       'gemini-3.5-flash-lite',
-      'gemini-flash-latest',
+      'gemini-flash-lite-latest',
+      'gemini-3.1-flash-lite',
       'gemini-3.5-flash',
-      'gemini-3.7-flash',
+      'gemini-flash-latest',
     ]
   }
 
@@ -43,7 +44,7 @@ export class GeminiProvider extends AIProvider {
     temperature = 0.7,
   }) {
     const ai = this._getClient()
-    const primaryModel = model || config.gemini.defaultModel || 'gemini-flash-latest'
+    const primaryModel = model || config.gemini.defaultModel || 'gemini-3.5-flash-lite'
     const modelChain = [primaryModel, ...this.fallbackModels.filter((m) => m !== primaryModel)]
 
     let lastError = null

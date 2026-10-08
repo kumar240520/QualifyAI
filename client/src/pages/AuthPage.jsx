@@ -16,6 +16,8 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext.jsx'
 import authBgImage from '../assets/auth-atmospheric-bg.jpg'
+import { normalizeApiError, getFieldError } from '../utils/errorNormalizer.js'
+import { validateLogin, validateSignup, validateEmail, validatePassword } from '../utils/validators.js'
 
 // Social Authentication Google Brand Icon
 const GoogleIcon = () => (
@@ -89,6 +91,7 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
   const [resetSentEmail, setResetSentEmail] = useState('')
 
   // Form Fields
@@ -122,6 +125,7 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
   const switchMode = (mode) => {
     setErrorMessage('')
     setSuccessMessage('')
+    setFieldErrors({})
     setAuthMode(mode)
   }
 
@@ -130,19 +134,18 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
     e.preventDefault()
     setErrorMessage('')
     setSuccessMessage('')
+    setFieldErrors({})
 
-    if (!loginEmail || !loginEmail.includes('@')) {
-      setErrorMessage('Please enter a valid email address.')
-      return
-    }
-    if (!loginPassword || loginPassword.length < 6) {
-      setErrorMessage('Password must be at least 6 characters.')
+    const val = validateLogin({ email: loginEmail, password: loginPassword })
+    if (!val.isValid) {
+      setFieldErrors(val.errors)
+      setErrorMessage('Please fill in the required fields correctly.')
       return
     }
 
     setIsSubmitting(true)
     try {
-      const res = await login({ email: loginEmail, password: loginPassword })
+      const res = await login({ email: loginEmail.trim().toLowerCase(), password: loginPassword })
       if (res.success) {
         setSuccessMessage('Login successful! Redirecting to workspace...')
         setTimeout(() => {
@@ -155,10 +158,14 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
           }
         }, 500)
       } else {
-        setErrorMessage(res.error || 'Authentication failed. Please verify credentials.')
+        const norm = normalizeApiError(res.error, 'Invalid email or password.')
+        setErrorMessage(norm.message)
+        setFieldErrors(norm.fields || {})
       }
     } catch (err) {
-      setErrorMessage(err.message || 'An unexpected error occurred during login.')
+      const norm = normalizeApiError(err, 'An unexpected error occurred during login.')
+      setErrorMessage(norm.message)
+      setFieldErrors(norm.fields || {})
     } finally {
       setIsSubmitting(false)
     }
@@ -169,25 +176,20 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
     e.preventDefault()
     setErrorMessage('')
     setSuccessMessage('')
+    setFieldErrors({})
 
-    if (!signupName.trim()) {
-      setErrorMessage('Please enter your full name.')
-      return
-    }
-    if (!signupEmail || !signupEmail.includes('@')) {
-      setErrorMessage('Please enter a valid email address.')
-      return
-    }
-    if (!signupPassword || signupPassword.length < 6) {
-      setErrorMessage('Password must be at least 6 characters.')
+    const val = validateSignup({ fullName: signupName, email: signupEmail, password: signupPassword })
+    if (!val.isValid) {
+      setFieldErrors(val.errors)
+      setErrorMessage('Please fill in the required fields correctly.')
       return
     }
 
     setIsSubmitting(true)
     try {
       const res = await signup({
-        name: signupName,
-        email: signupEmail,
+        name: signupName.trim(),
+        email: signupEmail.trim().toLowerCase(),
         password: signupPassword,
         role: signupRole,
       })
@@ -206,10 +208,14 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
           }, 1200)
         }
       } else {
-        setErrorMessage(res.error || 'Account creation failed.')
+        const norm = normalizeApiError(res.error, 'Account creation failed.')
+        setErrorMessage(norm.message)
+        setFieldErrors(norm.fields || {})
       }
     } catch (err) {
-      setErrorMessage(err.message || 'An unexpected error occurred during signup.')
+      const norm = normalizeApiError(err, 'An unexpected error occurred during signup.')
+      setErrorMessage(norm.message)
+      setFieldErrors(norm.fields || {})
     } finally {
       setIsSubmitting(false)
     }
@@ -220,23 +226,30 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
     e.preventDefault()
     setErrorMessage('')
     setSuccessMessage('')
+    setFieldErrors({})
 
-    if (!forgotEmail || !forgotEmail.includes('@')) {
-      setErrorMessage('Please enter a valid email address.')
+    const val = validateEmail(forgotEmail)
+    if (!val.valid) {
+      setFieldErrors({ email: val.error })
+      setErrorMessage(val.error)
       return
     }
 
     setIsSubmitting(true)
     try {
-      const res = await forgotPassword(forgotEmail)
+      const res = await forgotPassword(val.value)
       if (res.success) {
-        setResetSentEmail(forgotEmail)
+        setResetSentEmail(val.value)
         setSuccessMessage('Password reset link sent! Please check your email inbox.')
       } else {
-        setErrorMessage(res.error || 'Could not send reset email. Please try again.')
+        const norm = normalizeApiError(res.error, 'Could not send reset email. Please try again.')
+        setErrorMessage(norm.message)
+        setFieldErrors(norm.fields || {})
       }
     } catch (err) {
-      setErrorMessage(err.message || 'Failed to request password reset.')
+      const norm = normalizeApiError(err, 'Failed to request password reset.')
+      setErrorMessage(norm.message)
+      setFieldErrors(norm.fields || {})
     } finally {
       setIsSubmitting(false)
     }
@@ -247,12 +260,16 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
     e.preventDefault()
     setErrorMessage('')
     setSuccessMessage('')
+    setFieldErrors({})
 
-    if (!newPassword || newPassword.length < 6) {
-      setErrorMessage('Password must be at least 6 characters long.')
+    const passVal = validatePassword(newPassword)
+    if (!passVal.valid) {
+      setFieldErrors({ password: passVal.error })
+      setErrorMessage(passVal.error)
       return
     }
     if (newPassword !== confirmPassword) {
+      setFieldErrors({ confirmPassword: 'Passwords do not match. Please re-enter.' })
       setErrorMessage('Passwords do not match. Please re-enter.')
       return
     }
@@ -269,10 +286,14 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
           setSuccessMessage('Password updated! You can now log in with your new password.')
         }, 1200)
       } else {
-        setErrorMessage(res.error || 'Failed to update password.')
+        const norm = normalizeApiError(res.error, 'Failed to update password.')
+        setErrorMessage(norm.message)
+        setFieldErrors(norm.fields || {})
       }
     } catch (err) {
-      setErrorMessage(err.message || 'An unexpected error occurred during password update.')
+      const norm = normalizeApiError(err, 'An unexpected error occurred during password update.')
+      setErrorMessage(norm.message)
+      setFieldErrors(norm.fields || {})
     } finally {
       setIsSubmitting(false)
     }
@@ -387,18 +408,25 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                         htmlFor="login-email"
                         className="block text-[11px] sm:text-xs font-medium text-slate-700"
                       >
-                        Email
+                        Email <span className="text-rose-500">*</span>
                       </label>
                       <input
                         id="login-email"
                         type="email"
                         autoComplete="email"
-                        required
                         value={loginEmail}
-                        onChange={(e) => setLoginEmail(e.target.value)}
+                        onChange={(e) => {
+                          setLoginEmail(e.target.value)
+                          if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: null }))
+                        }}
                         placeholder="hello@example.com"
-                        className="w-full h-10 sm:h-11 px-3.5 bg-[#F1F1F6] border border-transparent focus:border-slate-300 focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                        className={`w-full h-10 sm:h-11 px-3.5 bg-[#F1F1F6] border ${
+                          fieldErrors.email ? 'border-rose-400 bg-rose-50/20' : 'border-transparent focus:border-slate-300'
+                        } focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none`}
                       />
+                      {fieldErrors.email && (
+                        <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.email}</p>
+                      )}
                     </div>
 
                     {/* Password Input */}
@@ -407,18 +435,22 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                         htmlFor="login-password"
                         className="block text-[11px] sm:text-xs font-medium text-slate-700"
                       >
-                        Password
+                        Password <span className="text-rose-500">*</span>
                       </label>
                       <div className="relative flex items-center">
                         <input
                           id="login-password"
                           type={showPassword ? 'text' : 'password'}
                           autoComplete="current-password"
-                          required
                           value={loginPassword}
-                          onChange={(e) => setLoginPassword(e.target.value)}
+                          onChange={(e) => {
+                            setLoginPassword(e.target.value)
+                            if (fieldErrors.password) setFieldErrors((prev) => ({ ...prev, password: null }))
+                          }}
                           placeholder="••••••••"
-                          className="w-full h-10 sm:h-11 pl-3.5 pr-10 bg-[#F1F1F6] border border-transparent focus:border-slate-300 focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                          className={`w-full h-10 sm:h-11 pl-3.5 pr-10 bg-[#F1F1F6] border ${
+                            fieldErrors.password ? 'border-rose-400 bg-rose-50/20' : 'border-transparent focus:border-slate-300'
+                          } focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none`}
                         />
                         <button
                           type="button"
@@ -429,6 +461,9 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
+                      {fieldErrors.password && (
+                        <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.password}</p>
+                      )}
                     </div>
 
                     {/* Remember Me & Forgot Password Row */}
@@ -574,18 +609,25 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                         htmlFor="signup-name"
                         className="block text-[11px] sm:text-xs font-medium text-slate-700"
                       >
-                        Full Name
+                        Full Name <span className="text-rose-500">*</span>
                       </label>
                       <input
                         id="signup-name"
                         type="text"
                         autoComplete="name"
-                        required
                         value={signupName}
-                        onChange={(e) => setSignupName(e.target.value)}
+                        onChange={(e) => {
+                          setSignupName(e.target.value)
+                          if (fieldErrors.fullName) setFieldErrors((prev) => ({ ...prev, fullName: null }))
+                        }}
                         placeholder="Alex Rivera"
-                        className="w-full h-10 sm:h-11 px-3.5 bg-[#F1F1F6] border border-transparent focus:border-slate-300 focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                        className={`w-full h-10 sm:h-11 px-3.5 bg-[#F1F1F6] border ${
+                          fieldErrors.fullName ? 'border-rose-400 bg-rose-50/20' : 'border-transparent focus:border-slate-300'
+                        } focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none`}
                       />
+                      {fieldErrors.fullName && (
+                        <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.fullName}</p>
+                      )}
                     </div>
 
                     {/* Email Input */}
@@ -594,18 +636,25 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                         htmlFor="signup-email"
                         className="block text-[11px] sm:text-xs font-medium text-slate-700"
                       >
-                        Email
+                        Email <span className="text-rose-500">*</span>
                       </label>
                       <input
                         id="signup-email"
                         type="email"
                         autoComplete="email"
-                        required
                         value={signupEmail}
-                        onChange={(e) => setSignupEmail(e.target.value)}
+                        onChange={(e) => {
+                          setSignupEmail(e.target.value)
+                          if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: null }))
+                        }}
                         placeholder="hello@example.com"
-                        className="w-full h-10 sm:h-11 px-3.5 bg-[#F1F1F6] border border-transparent focus:border-slate-300 focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                        className={`w-full h-10 sm:h-11 px-3.5 bg-[#F1F1F6] border ${
+                          fieldErrors.email ? 'border-rose-400 bg-rose-50/20' : 'border-transparent focus:border-slate-300'
+                        } focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none`}
                       />
+                      {fieldErrors.email && (
+                        <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.email}</p>
+                      )}
                     </div>
 
                     {/* Password Input */}
@@ -614,18 +663,22 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                         htmlFor="signup-password"
                         className="block text-[11px] sm:text-xs font-medium text-slate-700"
                       >
-                        Password
+                        Password <span className="text-rose-500">*</span>
                       </label>
                       <div className="relative flex items-center">
                         <input
                           id="signup-password"
                           type={showPassword ? 'text' : 'password'}
                           autoComplete="new-password"
-                          required
                           value={signupPassword}
-                          onChange={(e) => setSignupPassword(e.target.value)}
+                          onChange={(e) => {
+                            setSignupPassword(e.target.value)
+                            if (fieldErrors.password) setFieldErrors((prev) => ({ ...prev, password: null }))
+                          }}
                           placeholder="••••••••"
-                          className="w-full h-10 sm:h-11 pl-3.5 pr-10 bg-[#F1F1F6] border border-transparent focus:border-slate-300 focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                          className={`w-full h-10 sm:h-11 pl-3.5 pr-10 bg-[#F1F1F6] border ${
+                            fieldErrors.password ? 'border-rose-400 bg-rose-50/20' : 'border-transparent focus:border-slate-300'
+                          } focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none`}
                         />
                         <button
                           type="button"
@@ -636,6 +689,9 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
+                      {fieldErrors.password && (
+                        <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.password}</p>
+                      )}
                     </div>
 
                     {/* Primary Button */}
@@ -745,18 +801,25 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                           htmlFor="forgot-email"
                           className="block text-[11px] sm:text-xs font-medium text-slate-700"
                         >
-                          Email Address
+                          Email Address <span className="text-rose-500">*</span>
                         </label>
                         <input
                           id="forgot-email"
                           type="email"
                           autoComplete="email"
-                          required
                           value={forgotEmail}
-                          onChange={(e) => setForgotEmail(e.target.value)}
+                          onChange={(e) => {
+                            setForgotEmail(e.target.value)
+                            if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: null }))
+                          }}
                           placeholder="hello@example.com"
-                          className="w-full h-10 sm:h-11 px-3.5 bg-[#F1F1F6] border border-transparent focus:border-slate-300 focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                          className={`w-full h-10 sm:h-11 px-3.5 bg-[#F1F1F6] border ${
+                            fieldErrors.email ? 'border-rose-400 bg-rose-50/20' : 'border-transparent focus:border-slate-300'
+                          } focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none`}
                         />
+                        {fieldErrors.email && (
+                          <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.email}</p>
+                        )}
                       </div>
 
                       {/* Primary Button */}
@@ -822,17 +885,21 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                         htmlFor="new-password"
                         className="block text-[11px] sm:text-xs font-medium text-slate-700"
                       >
-                        New Password
+                        New Password <span className="text-rose-500">*</span>
                       </label>
                       <div className="relative flex items-center">
                         <input
                           id="new-password"
                           type={showPassword ? 'text' : 'password'}
-                          required
                           value={newPassword}
-                          onChange={(e) => setNewPassword(e.target.value)}
+                          onChange={(e) => {
+                            setNewPassword(e.target.value)
+                            if (fieldErrors.password) setFieldErrors((prev) => ({ ...prev, password: null }))
+                          }}
                           placeholder="••••••••"
-                          className="w-full h-10 sm:h-11 pl-3.5 pr-10 bg-[#F1F1F6] border border-transparent focus:border-slate-300 focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                          className={`w-full h-10 sm:h-11 pl-3.5 pr-10 bg-[#F1F1F6] border ${
+                            fieldErrors.password ? 'border-rose-400 bg-rose-50/20' : 'border-transparent focus:border-slate-300'
+                          } focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none`}
                         />
                         <button
                           type="button"
@@ -843,6 +910,9 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
+                      {fieldErrors.password && (
+                        <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.password}</p>
+                      )}
                     </div>
 
                     {/* Confirm Password */}
@@ -851,17 +921,21 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                         htmlFor="confirm-password"
                         className="block text-[11px] sm:text-xs font-medium text-slate-700"
                       >
-                        Confirm Password
+                        Confirm Password <span className="text-rose-500">*</span>
                       </label>
                       <div className="relative flex items-center">
                         <input
                           id="confirm-password"
                           type={showConfirmPassword ? 'text' : 'password'}
-                          required
                           value={confirmPassword}
-                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          onChange={(e) => {
+                            setConfirmPassword(e.target.value)
+                            if (fieldErrors.confirmPassword) setFieldErrors((prev) => ({ ...prev, confirmPassword: null }))
+                          }}
                           placeholder="••••••••"
-                          className="w-full h-10 sm:h-11 pl-3.5 pr-10 bg-[#F1F1F6] border border-transparent focus:border-slate-300 focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none"
+                          className={`w-full h-10 sm:h-11 pl-3.5 pr-10 bg-[#F1F1F6] border ${
+                            fieldErrors.confirmPassword ? 'border-rose-400 bg-rose-50/20' : 'border-transparent focus:border-slate-300'
+                          } focus:bg-white focus:ring-1 focus:ring-slate-400 rounded-lg text-xs sm:text-[13px] text-slate-900 placeholder:text-slate-400 transition-all outline-none`}
                         />
                         <button
                           type="button"
@@ -872,6 +946,9 @@ export default function AuthPage({ onBackToHome, onAuthSuccess }) {
                           {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
+                      {fieldErrors.confirmPassword && (
+                        <p className="text-[11px] text-rose-500 font-medium mt-0.5">{fieldErrors.confirmPassword}</p>
+                      )}
                     </div>
 
                     {/* Primary Button */}

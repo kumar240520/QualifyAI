@@ -1,4 +1,6 @@
 import { rubricService } from '../services/rubricService.js'
+import { assertValid, validateCreateQuestionPayload } from '../validators/index.js'
+import { ValidationError } from '../utils/errors.js'
 
 /**
  * Controller for Rubric Matrix and Question Intelligence APIs
@@ -62,6 +64,10 @@ export const rubricController = {
       const organizationId = req.organizationId
       const userToken = req.token || req.accessToken
       const { criteria } = req.body
+
+      if (!criteria || (!Array.isArray(criteria) && typeof criteria !== 'object')) {
+        throw new ValidationError({ criteria: 'Valid criteria array or map is required.' })
+      }
 
       const updated = await rubricService.updateRubric({
         jobId,
@@ -137,12 +143,13 @@ export const rubricController = {
       const jobId = req.params.id
       const organizationId = req.organizationId
       const userToken = req.token || req.accessToken
-      const questionData = req.body
+
+      const validated = assertValid(validateCreateQuestionPayload(req.body))
 
       const question = await rubricService.createQuestion({
         jobId,
         organizationId,
-        questionData,
+        questionData: validated,
         userToken,
       })
 

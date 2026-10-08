@@ -20,6 +20,7 @@ import {
   Filter,
 } from 'lucide-react'
 import { rubricService } from '../../services/rubricService.js'
+import { normalizeApiError } from '../../utils/errorNormalizer.js'
 
 export default function RubricMatrixView({ job, onBack, onProceedToInvitations }) {
   const [rubric, setRubric] = useState(null)
@@ -67,7 +68,8 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
       }
     } catch (err) {
       console.error('Error fetching rubric details:', err)
-      setError(err.message || 'Failed to load rubric.')
+      const normalized = normalizeApiError(err, 'Failed to load rubric.')
+      setError(normalized.message)
     } finally {
       setIsLoading(false)
     }
@@ -94,7 +96,8 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
       setSuccessMessage('Google Gemini has successfully calibrated the 5-pillar rubric and synthesized targeted interview questions!')
     } catch (err) {
       console.error('AI Rubric Generation Error:', err)
-      setError(err.message || 'Failed to generate rubric and questions with Gemini.')
+      const normalized = normalizeApiError(err, 'Failed to generate rubric and questions with AI.')
+      setError(normalized.message)
     } finally {
       setIsGenerating(false)
     }
@@ -133,7 +136,8 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
       await rubricService.updateRubric(job.id, criteria)
       setSuccessMessage('Rubric matrix calibrated and saved to database successfully!')
     } catch (err) {
-      setError(err.message || 'Failed to save rubric.')
+      const normalized = normalizeApiError(err, 'Failed to save rubric. Please try again.')
+      setError(normalized.message)
     } finally {
       setIsSaving(false)
     }
@@ -141,16 +145,21 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
 
   const handleAddCustomQuestion = async (e) => {
     e.preventDefault()
-    if (!newQuestionText.trim()) return
+    const cleanPrompt = newQuestionText.trim()
+    if (!cleanPrompt || cleanPrompt.length < 5) {
+      setError('Question prompt must be at least 5 characters long.')
+      return
+    }
 
     try {
+      setError('')
       const conceptsArray = newQuestionConcepts
         .split(',')
         .map((c) => c.trim())
         .filter(Boolean)
 
       const created = await rubricService.createQuestion(job.id, {
-        question_text: newQuestionText.trim(),
+        question_text: cleanPrompt,
         type: newQuestionType,
         difficulty: newQuestionDifficulty,
         metadata: {
@@ -163,8 +172,10 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
       setNewQuestionText('')
       setNewQuestionConcepts('')
       setShowAddQuestion(false)
+      setSuccessMessage('Question added to requisition pool successfully!')
     } catch (err) {
-      setError(err.message || 'Failed to add question.')
+      const normalized = normalizeApiError(err, 'Failed to add question to rubric.')
+      setError(normalized.message)
     }
   }
 
@@ -173,7 +184,8 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
       await rubricService.deleteQuestion(job.id, questionId)
       setQuestions(questions.filter((q) => q.id !== questionId))
     } catch (err) {
-      setError(err.message || 'Failed to delete question.')
+      const normalized = normalizeApiError(err, 'Failed to delete question.')
+      setError(normalized.message)
     }
   }
 

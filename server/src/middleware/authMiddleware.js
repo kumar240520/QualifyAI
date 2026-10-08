@@ -1,4 +1,5 @@
 import { createUserScopedClient, supabase } from '../integrations/supabaseClient.js'
+import { AuthenticationError, ForbiddenError } from '../utils/errors.js'
 
 /**
  * Authentication Middleware:
@@ -11,27 +12,18 @@ export async function requireAuth(req, res, next) {
   try {
     const authHeader = req.headers.authorization
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        error: 'Authentication required. Missing or invalid Authorization header.',
-      })
+      return next(new AuthenticationError('Authentication required. Missing or invalid Authorization header.'))
     }
 
     const token = authHeader.split(' ')[1]
     if (!token) {
-      return res.status(401).json({
-        success: false,
-        error: 'Authentication token missing.',
-      })
+      return next(new AuthenticationError('Authentication token missing.'))
     }
 
     // Verify token with Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.getUser(token)
     if (authError || !authData?.user) {
-      return res.status(401).json({
-        success: false,
-        error: authError?.message || 'Invalid or expired session token.',
-      })
+      return next(new AuthenticationError(authError?.message || 'Invalid or expired session token.'))
     }
 
     const authUser = authData.user
@@ -63,10 +55,7 @@ export async function requireAuth(req, res, next) {
     next()
   } catch (err) {
     console.error('[AuthMiddleware] Unexpected exception:', err)
-    return res.status(500).json({
-      success: false,
-      error: 'Internal authentication error.',
-    })
+    return next(err)
   }
 }
 
@@ -77,15 +66,16 @@ export async function requireAuth(req, res, next) {
 export function requireRole(allowedRoles = []) {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ success: false, error: 'Authentication required.' })
+      return next(new AuthenticationError('Authentication required.'))
     }
 
     const role = req.user.role || 'CANDIDATE'
     if (allowedRoles.length > 0 && !allowedRoles.includes(role)) {
-      return res.status(403).json({
-        success: false,
-        error: `Access restricted. Required role: ${allowedRoles.join(' or ')}. Your role: ${role}`,
-      })
+      return next(
+        new ForbiddenError(
+          `Access restricted. Required role: ${allowedRoles.join(' or ')}. Your role: ${role}`
+        )
+      )
     }
 
     next()

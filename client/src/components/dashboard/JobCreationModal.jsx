@@ -17,6 +17,8 @@ import {
 } from 'lucide-react'
 import { jobService } from '../../services/jobService.js'
 import { rubricService } from '../../services/rubricService.js'
+import { validateJobCreation } from '../../utils/validators.js'
+import { normalizeApiError } from '../../utils/errorNormalizer.js'
 
 const SENIORITY_LEVELS = [
   { value: 'JUNIOR', label: 'Junior (0-2 yrs)' },
@@ -57,6 +59,7 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
   const [description, setDescription] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
 
   // Extracted Requirements state
   const [createdJob, setCreatedJob] = useState(null)
@@ -73,15 +76,27 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
     setDepartment('Core Infrastructure')
     setSeniority('SENIOR')
     setDescription(SAMPLE_JD)
+    setFieldErrors({})
+    setError('')
   }
 
   const handleStartParsing = async (e) => {
     e.preventDefault()
-    if (!title.trim() || !description.trim()) {
-      setError('Please provide both a Job Title and Job Description.')
+
+    const validation = validateJobCreation({
+      title,
+      description,
+      department,
+      seniority,
+    })
+
+    if (!validation.isValid) {
+      setFieldErrors(validation.errors)
+      setError('Please provide all required fields to proceed.')
       return
     }
 
+    setFieldErrors({})
     setError('')
     setIsLoading(true)
     setStep(2)
@@ -103,7 +118,11 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
       setStep(3)
     } catch (err) {
       console.error('JD Parsing Error:', err)
-      setError(err.message || 'Failed to parse Job Description with Gemini.')
+      const normalized = normalizeApiError(err, 'Failed to parse Job Description with AI. Please try again.')
+      setError(normalized.message)
+      if (normalized.fields) {
+        setFieldErrors(normalized.fields)
+      }
       setStep(1)
     } finally {
       setIsLoading(false)
@@ -150,7 +169,8 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
       onJobCreated?.(createdJob)
       onClose()
     } catch (err) {
-      setError(err.message || 'Failed to finalize requisition.')
+      const normalized = normalizeApiError(err, 'Failed to finalize requisition. Please try again.')
+      setError(normalized.message)
     } finally {
       setIsLoading(false)
     }
@@ -202,16 +222,28 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Job Title <span className="text-blue-600">*</span>
+                    Job Title <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
                     required
                     placeholder="e.g. Senior Distributed Systems Engineer"
                     value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                    onChange={(e) => {
+                      setTitle(e.target.value)
+                      if (fieldErrors.title) {
+                        setFieldErrors((prev) => ({ ...prev, title: null }))
+                      }
+                    }}
+                    className={`w-full px-3.5 py-2.5 bg-slate-50 border rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
+                      fieldErrors.title
+                        ? 'border-red-400 ring-2 ring-red-400/20'
+                        : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                    }`}
                   />
+                  {fieldErrors.title && (
+                    <p className="mt-1 text-xs text-red-600 font-medium">{fieldErrors.title}</p>
+                  )}
                 </div>
 
                 <div>
@@ -253,7 +285,7 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
-                    Raw Job Description (Text) <span className="text-blue-600">*</span>
+                    Raw Job Description (Text) <span className="text-red-500">*</span>
                   </label>
                   <button
                     type="button"
@@ -269,9 +301,21 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
                   required
                   placeholder="Paste complete job description, technical requirements, responsibilities, and expected tech stack here..."
                   value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition font-mono leading-relaxed text-xs"
+                  onChange={(e) => {
+                    setDescription(e.target.value)
+                    if (fieldErrors.description) {
+                      setFieldErrors((prev) => ({ ...prev, description: null }))
+                    }
+                  }}
+                  className={`w-full px-4 py-3 bg-slate-50 border rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 font-mono leading-relaxed text-xs transition ${
+                    fieldErrors.description
+                      ? 'border-red-400 ring-2 ring-red-400/20'
+                      : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                  }`}
                 />
+                {fieldErrors.description && (
+                  <p className="mt-1 text-xs text-red-600 font-medium">{fieldErrors.description}</p>
+                )}
               </div>
 
               <div className="pt-2 flex justify-end gap-3">

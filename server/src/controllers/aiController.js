@@ -1,5 +1,6 @@
 import { generateContent, isGeminiConfigured } from '../integrations/geminiClient.js'
 import { config } from '../config/env.js'
+import { ValidationError } from '../utils/errors.js'
 
 export const aiController = {
   /**
@@ -21,12 +22,15 @@ export const aiController = {
   /**
    * Test generation endpoint for verification
    */
-  async test(req, res) {
+  async test(req, res, next) {
     try {
       if (!isGeminiConfigured()) {
-        return res.status(400).json({
+        return res.status(503).json({
           success: false,
-          error: 'GEMINI_API_KEY is not set. Please paste your key in server/.env.',
+          error: {
+            code: 'AI_SERVICE_UNAVAILABLE',
+            message: 'AI Service is not configured yet. Please configure GEMINI_API_KEY in server environment.',
+          },
         })
       }
 
@@ -40,30 +44,23 @@ export const aiController = {
         answer: result.text,
       })
     } catch (err) {
-      console.error('[AIController.test] Error:', err.message)
-      return res.status(500).json({
-        success: false,
-        error: err.message || 'Gemini generation failed.',
-      })
+      next(err)
     }
   },
 
   /**
    * General generation endpoint
    */
-  async generate(req, res) {
+  async generate(req, res, next) {
     try {
       const { prompt, systemInstruction, model, temperature } = req.body
 
-      if (!prompt) {
-        return res.status(400).json({
-          success: false,
-          error: 'Prompt string is required.',
-        })
+      if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+        throw new ValidationError({ prompt: 'Prompt is required and cannot be empty.' })
       }
 
       const result = await generateContent({
-        prompt,
+        prompt: prompt.trim(),
         systemInstruction,
         model,
         temperature,
@@ -74,11 +71,7 @@ export const aiController = {
         data: result,
       })
     } catch (err) {
-      console.error('[AIController.generate] Error:', err.message)
-      return res.status(500).json({
-        success: false,
-        error: err.message || 'AI generation failed.',
-      })
+      next(err)
     }
   },
 }

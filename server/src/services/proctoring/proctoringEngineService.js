@@ -1,4 +1,11 @@
 import { getServiceSupabaseClient } from '../../integrations/supabaseClient.js'
+import { randomUUID } from 'node:crypto'
+
+const EVENT_TYPES = new Set([
+  'FOCUS_LOSS', 'TAB_SWITCH', 'VISIBILITY_CHANGE', 'ACOUSTIC_ANOMALY',
+  'FULLSCREEN_EXIT', 'CLIPBOARD_ATTEMPT', 'RIGHT_CLICK', 'SCREENSHOT_ATTEMPT', 'DEVTOOLS_ATTEMPT',
+  'FACE_ABSENT', 'MULTIPLE_FACES', 'CAMERA_LOST', 'FACE_ORIENTATION',
+])
 
 /**
  * Enterprise Assessment Integrity & Telemetry Engine
@@ -9,60 +16,72 @@ export const proctoringEngineService = {
   /**
    * Ingest a batch of proctoring telemetry events from candidate assessment room
    */
-  async recordEvents({ interviewId, events }) {
+  async recordEvents({ interviewId, token, events }) {
     if (!interviewId) {
       throw new Error('Interview ID is required.')
     }
     if (!Array.isArray(events) || events.length === 0) {
-      return { insertedCount: 0 }
+      return { insertedCount: 0, warningCount: 0, terminated: false }
     }
-
-    const supabase = getServiceSupabaseClient()
-
-    // 1. Verify interview exists
-    const { data: interview, error: intErr } = await supabase
-      .from('interviews')
-      .select('id, status')
-      .eq('id', interviewId)
-      .single()
-
-    if (intErr || !interview) {
-      const err = new Error('Interview not found.')
-      err.status = 404
+    if (!token || token.length > 512) {
+      const err = new Error('A valid interview invitation token is required.')
+      err.status = 401
+      throw err
+    }
+    if (events.length > 50) {
+      const err = new Error('A proctoring batch cannot exceed 50 events.')
+      err.status = 400
       throw err
     }
 
-    // 2. Format event records
-    const validEventTypes = ['FOCUS_LOSS', 'TAB_SWITCH', 'VISIBILITY_CHANGE', 'ACOUSTIC_ANOMALY']
-    const validSeverities = ['LOW', 'MEDIUM', 'HIGH']
-
-    const recordsToInsert = events.map((evt) => {
-      const eventType = validEventTypes.includes(evt.event_type) ? evt.event_type : 'FOCUS_LOSS'
-      const severity = validSeverities.includes(evt.severity) ? evt.severity : 'LOW'
-      const timestampMs = Number(evt.timestamp_ms) || Date.now()
-
-      return {
-        interview_id: interviewId,
-        event_type: eventType,
-        severity,
-        metadata: typeof evt.metadata === 'object' && evt.metadata !== null ? evt.metadata : {},
-        timestamp_ms: timestampMs,
+    const supabase = getServiceSupabaseClient()
+    const outcomes = []
+    for (const evt of events) {
+      const eventType = String(evt?.event_type || '')
+      if (!EVENT_TYPES.has(eventType)) {
+        const err = new Error(`Unsupported proctoring event type: ${eventType || '(missing)'}`)
+        err.status = 400
+        throw err
       }
-    })
-
-    // 3. Batch insert into proctoring_events
-    const { error: insErr } = await supabase.from('proctoring_events').insert(recordsToInsert)
-
-    if (insErr) {
-      console.error('[ProctoringEngine.recordEvents] Insert error:', insErr.message)
-      throw new Error(`Failed to record proctoring events: ${insErr.message}`)
+      const severity = ['LOW', 'MEDIUM', 'HIGH'].includes(evt.severity) ? evt.severity : 'LOW'
+      const metadata = typeof evt.metadata === 'object' && evt.metadata !== null ? evt.metadata : {}
+      const { data, error } = await supabase.rpc('record_proctoring_event', {
+        p_interview_id: interviewId,
+        p_invitation_token: token,
+        p_event_id: evt.event_id || randomUUID(),
+        p_event_type: eventType,
+        p_severity: severity,
+        p_metadata: metadata,
+        p_timestamp_ms: Number(evt.timestamp_ms) || Date.now(),
+        p_is_warning: evt.is_warning !== false,
+      })
+      if (error) {
+        if (error.code === '42501') {
+          const err = new Error('The invitation is not authorized for this active interview.')
+          err.status = 403
+          throw err
+        }
+        console.error('[ProctoringEngine.recordEvents] Atomic event write failed:', error.message)
+        throw new Error('Unable to persist proctoring event. Apply the serverless proctoring migration before enabling production interviews.')
+      }
+      outcomes.push({ ...data, eventType, metadata, severity, isWarning: evt.is_warning !== false })
     }
 
-    // 4. Update synthesized proctoring summary in background
+    const warnings = outcomes.filter((item) => item.isWarning && item.warningCount !== undefined && !item.duplicate)
+    const lastOutcome = outcomes[outcomes.length - 1]
     const summary = await this.calculateIntegritySummary(interviewId)
 
     return {
-      insertedCount: recordsToInsert.length,
+      insertedCount: outcomes.filter((item) => !item.duplicate).length,
+      warningCount: lastOutcome?.warningCount ?? null,
+      terminated: outcomes.some((item) => item.terminated),
+      warnings: warnings.map((item) => ({
+        count: item.warningCount,
+        type: item.eventType,
+        reason: item.metadata?.reason || `Proctoring event: ${item.eventType}`,
+        severity: item.severity,
+        eventId: item.eventId,
+      })),
       summary,
     }
   },

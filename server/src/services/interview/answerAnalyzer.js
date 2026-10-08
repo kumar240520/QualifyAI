@@ -128,6 +128,7 @@ Respond strictly with a valid JSON object matching this schema:
     const aiResult = await aiOrchestrator.generateStructured({
       prompt,
       schema,
+      model: 'gemini-3.5-flash-lite',
       systemInstruction:
         'You are the QualifyAI Answer Evaluation Engine. Be strict, objective, and evidence-grounded. Never hallucinate concepts. Return strictly valid JSON.',
     })

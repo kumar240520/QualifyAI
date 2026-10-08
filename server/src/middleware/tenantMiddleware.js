@@ -1,3 +1,5 @@
+import { AuthenticationError, ForbiddenError } from '../utils/errors.js'
+
 /**
  * Tenant Binding Middleware:
  * Inspects user's organization memberships and binds the active tenant context.
@@ -6,10 +8,7 @@
 export async function requireTenant(req, res, next) {
   try {
     if (!req.user || !req.user.id) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized: User authentication required before tenant evaluation.',
-      })
+      return next(new AuthenticationError('User authentication required before tenant evaluation.'))
     }
 
     const db = req.db
@@ -29,17 +28,11 @@ export async function requireTenant(req, res, next) {
 
     if (error) {
       console.error('[TenantMiddleware] Query error:', error)
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to verify organization context.',
-      })
+      return next(new Error('Failed to verify organization context.'))
     }
 
     if (!memberships || memberships.length === 0) {
-      return res.status(403).json({
-        success: false,
-        error: 'Forbidden: User does not belong to any authorized organization.',
-      })
+      return next(new ForbiddenError('User does not belong to any authorized organization.'))
     }
 
     const activeMembership = memberships[0]
@@ -58,10 +51,7 @@ export async function requireTenant(req, res, next) {
     next()
   } catch (err) {
     console.error('[TenantMiddleware] Unexpected exception:', err)
-    return res.status(500).json({
-      success: false,
-      error: 'Internal tenant resolution error.',
-    })
+    return next(err)
   }
 }
 

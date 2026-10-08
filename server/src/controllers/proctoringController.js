@@ -11,7 +11,7 @@ export const proctoringController = {
   async recordEvents(req, res) {
     try {
       const interviewId = req.params.id
-      const { events } = req.body
+      const { events, token } = req.body
 
       if (!events || !Array.isArray(events)) {
         return res.status(400).json({
@@ -22,6 +22,7 @@ export const proctoringController = {
 
       const result = await proctoringEngineService.recordEvents({
         interviewId,
+        token,
         events,
       })
 

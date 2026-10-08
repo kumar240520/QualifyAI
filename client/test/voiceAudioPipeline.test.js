@@ -152,3 +152,64 @@ test('compares server byte/frame diagnostics with browser-decoded chunks', async
   assert.equal(stats.rejectedChunks, 1)
   assert.equal(stats.chunksReceived, 0)
 })
+
+test('emits onPlaybackProgress with progress advancing to 1.0 upon stream completion', async () => {
+  const progressReports = []
+  const player = makePlayer({
+    onPlaybackProgress: (report) => progressReports.push(report),
+  })
+  player.beginTurn('test-turn-sync')
+  await player.enqueue(chunk(pcmBase64(new Array(4800).fill(100)), 1))
+  await player.completeStream()
+
+  // Drain active sources
+  player.activeSources.forEach((src) => src.onended?.())
+
+  assert.ok(progressReports.length > 0, 'Should have received at least one progress report')
+  const finalReport = progressReports[progressReports.length - 1]
+  assert.equal(finalReport.progress, 1.0)
+  assert.equal(finalReport.turnId, 'test-turn-sync')
+})
+
+test('progressive script reveals words sequentially synchronized with playback progress', () => {
+  const script = 'Welcome to QualifyAI. I will be your autonomous AI interviewer for today.'
+  const words = script.split(/\s+/)
+  const getRevealedText = (progress) => {
+    const count = progress >= 0.98
+      ? words.length
+      : Math.min(words.length, Math.max(1, Math.ceil(progress * words.length)))
+    return words.slice(0, count).join(' ')
+  }
+
+  // At 0% progress -> only the opening word is revealed
+  assert.equal(getRevealedText(0), 'Welcome')
+
+  // At 25% progress -> roughly a quarter of the script
+  assert.equal(getRevealedText(0.25), 'Welcome to QualifyAI.')
+
+  // At 50% progress -> half the script
+  assert.equal(getRevealedText(0.50), 'Welcome to QualifyAI. I will be')
+
+  // At 100% progress -> full script revealed
+  assert.equal(getRevealedText(1.0), script)
+})
+
+test('AudioPlaybackEngine force completion watchdog completes playback and drains sources cleanly', async () => {
+  let completed = false
+  const player = makePlayer({
+    onPlaybackComplete: () => {
+      completed = true
+    },
+  })
+
+  player.beginTurn('test-turn-1')
+  await player.enqueue(chunk(pcmBase64(new Array(12000).fill(50)), 1))
+  assert.equal(player.state, 'PLAYING')
+  assert.ok(player.activeSources.size > 0)
+
+  // Force completion (simulates watchdog when audio finished without streamComplete packet)
+  player._maybeCompletePlayback(true)
+  assert.equal(completed, true)
+  assert.equal(player.state, 'IDLE')
+  assert.equal(player.activeSources.size, 0)
+})

@@ -32,7 +32,7 @@ export class GeminiLiveTTSProvider extends TTSProvider {
    * Synthesizes text by establishing an ephemeral live connection turn
    * and streaming 24kHz PCM16 chunks through onChunk.
    */
-  async synthesize({ text, voiceProfile, onChunk, signal }) {
+  async synthesize({ text, voiceProfile, onChunk, onTextDelta, signal }) {
     if (!this.initialized || !this.ai) {
       throw new Error('GeminiLiveTTSProvider is not initialized')
     }
@@ -63,31 +63,66 @@ Delivery instructions:
 - Speak slightly slower, at an unhurried, thoughtful tempo.
 - Pause naturally between sentences as a thoughtful human interviewer does.
 - Maintain full pitch variation, warm resonance, and vocal energy from the opening words through to the very last word.
+- Deliver the ENTIRE message completely from start to finish without pausing indefinitely, stopping midway, or skipping any sentences.
 - Do not rush or flatten your intonation on the final sentence.
 - If the final sentence is a question, ask it with curious, inviting cadence.
 - Do not add any preamble, meta notes, or commentary.
 
 Message to deliver:
 ${structuredText}`
-      : `Speak the following message aloud directly to the candidate at a calm, unhurried pace with a warm, grounded pitch and conversational inflection (avoid rushed or high-pitched delivery): "${cleanedText}". Do NOT add any extra thoughts, preambles, or meta labels.`
+      : `Speak the following message aloud directly to the candidate at a calm, unhurried pace with a warm, grounded pitch and conversational inflection (avoid rushed or high-pitched delivery): "${cleanedText}". Deliver the entire message completely without stopping midway. Do NOT add any extra thoughts, preambles, or meta labels.`
 
     return new Promise((resolve, reject) => {
       let settled = false
       let session = null
 
-      const timeoutId = setTimeout(() => {
+      // Scaled overall timeout (at least 60s, scales with text length)
+      const maxDurationMs = Math.max(60000, Math.ceil(cleanedText.length * 200))
+      const hardTimeoutId = setTimeout(() => {
         if (!settled) {
           settled = true
+          cleanupTimers()
           try { session?.close?.() } catch (_) {}
-          reject(new Error(`Gemini Live TTS synthesis timed out after 12000ms`))
+          reject(new Error(`Gemini Live TTS synthesis exceeded max duration of ${maxDurationMs}ms`))
         }
-      }, 12000)
+      }, maxDurationMs)
+
+      // Sliding inactivity watchdog: resets on every audio chunk or text token received
+      let inactivityTimer = null
+      const resetInactivityWatchdog = () => {
+        if (inactivityTimer) clearTimeout(inactivityTimer)
+        inactivityTimer = setTimeout(() => {
+          if (!settled) {
+            settled = true
+            cleanupTimers()
+            try { session?.close?.() } catch (_) {}
+            if (chunkCount > 0) {
+              resolve({
+                fullTranscript: fullTranscript.trim() || cleanedText,
+                totalChunks: chunkCount,
+                durationMs: Date.now() - startTime,
+              })
+            } else {
+              reject(new Error('Gemini Live TTS stream stalled (no audio chunks received for 45s)'))
+            }
+          }
+        }, 45000)
+      }
+      resetInactivityWatchdog()
+
+      const cleanupTimers = () => {
+        clearTimeout(hardTimeoutId)
+        if (inactivityTimer) {
+          clearTimeout(inactivityTimer)
+          inactivityTimer = null
+        }
+      }
 
       if (signal) {
         signal.addEventListener('abort', () => {
           if (!settled) {
             settled = true
-            clearTimeout(timeoutId)
+            cleanupTimers()
             try { session?.close?.() } catch (_) {}
             reject(new Error('Gemini Live TTS synthesis aborted'))
           }
@@ -117,10 +152,15 @@ ${structuredText}`
           },
           onmessage: (msg) => {
             if (settled) return
+            resetInactivityWatchdog()
 
-            // Collect transcript if present
+            // Collect transcript if present and stream text deltas
             if (msg.serverContent?.outputTranscription?.text) {
-              fullTranscript += msg.serverContent.outputTranscription.text
+              const deltaText = msg.serverContent.outputTranscription.text
+              fullTranscript += deltaText
+              if (typeof onTextDelta === 'function') {
+                onTextDelta(deltaText)
+              }
             }
 
             // Stream PCM audio chunks
@@ -147,12 +187,15 @@ ${structuredText}`
 
               if (part.text) {
                 fullTranscript += part.text
+                if (typeof onTextDelta === 'function') {
+                  onTextDelta(part.text)
+                }
               }
             }
 
             if (msg.serverContent?.turnComplete) {
               settled = true
-              clearTimeout(timeoutId)
+              cleanupTimers()
               try { session?.close?.() } catch (_) {}
               resolve({
                 fullTranscript: fullTranscript.trim() || cleanedText,
@@ -164,15 +207,23 @@ ${structuredText}`
           onerror: (err) => {
             if (!settled) {
               settled = true
-              clearTimeout(timeoutId)
+              cleanupTimers()
               try { session?.close?.() } catch (_) {}
-              reject(err)
+              if (chunkCount > 0) {
+                resolve({
+                  fullTranscript: fullTranscript.trim() || cleanedText,
+                  totalChunks: chunkCount,
+                  durationMs: Date.now() - startTime,
+                })
+              } else {
+                reject(err)
+              }
             }
           },
           onclose: () => {
             if (!settled) {
               settled = true
-              clearTimeout(timeoutId)
+              cleanupTimers()
               resolve({
                 fullTranscript: fullTranscript.trim() || cleanedText,
                 totalChunks: chunkCount,
@@ -196,14 +247,14 @@ ${structuredText}`
         } catch (err) {
           if (!settled) {
             settled = true
-            clearTimeout(timeoutId)
+            cleanupTimers()
             reject(err)
           }
         }
       }).catch((err) => {
         if (!settled) {
           settled = true
-          clearTimeout(timeoutId)
+          cleanupTimers()
           reject(err)
         }
       })
