@@ -52,6 +52,20 @@ app.use((req, res, next) => {
   next()
 })
 
+app.get('/', (_req, res) => res.status(200).json({
+  name: 'QualifyAI Backend API',
+  status: 'online',
+  health: '/api/health',
+  version: '1.2.0',
+}))
+
+app.get('/api', (_req, res) => res.status(200).json({
+  name: 'QualifyAI Backend API',
+  status: 'online',
+  health: '/api/health',
+  version: '1.2.0',
+}))
+
 app.get('/api/health', (_req, res) => res.status(200).json({
   status: 'healthy',
   timestamp: new Date().toISOString(),
