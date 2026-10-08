@@ -3,6 +3,8 @@
   "buildCommand": "npm --prefix client run build",
   "outputDirectory": "client/dist",
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/[...path].js" },
+    { "source": "/api", "destination": "/api/index.js" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

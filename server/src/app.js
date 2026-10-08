@@ -36,6 +36,9 @@ app.use((req, res, next) => {
 app.use(cors({
   origin(origin, callback) {
     if (!origin || configuredOrigins.has(origin.replace(/\/$/, ''))) return callback(null, true)
+    try {
+      if (origin && /\.vercel\.app$/.test(new URL(origin).hostname)) return callback(null, true)
+    } catch (_) {}
     if (config.nodeEnv !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) return callback(null, true)
     return callback(new Error('Origin is not allowed by CORS.'))
   },
