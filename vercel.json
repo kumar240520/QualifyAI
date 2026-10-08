@@ -4,6 +4,7 @@
     "client": {
       "root": "client",
       "framework": "vite",
+      "outputDirectory": "dist",
       "bindings": [
         {
           "type": "service",
