@@ -11,7 +11,7 @@ if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
 export const config = {
   port: parseInt(process.env.PORT || '5000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',
+  clientUrl: process.env.CLIENT_SERVICE_URL || process.env.CLIENT_URL || 'http://localhost:3000',
   supabase: {
     url: process.env.SUPABASE_URL || 'https://gyyvjswwdhegfqxizdvl.supabase.co',
     anonKey: process.env.SUPABASE_ANON_KEY || '',

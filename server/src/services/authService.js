@@ -1,4 +1,5 @@
 import { supabase, createUserScopedClient } from '../integrations/supabaseClient.js'
+import { config } from '../config/env.js'
 
 /**
  * Auth Domain Service
@@ -108,7 +109,7 @@ class AuthService {
     const cleanEmail = email.trim().toLowerCase()
 
     const { data, error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-      redirectTo: redirectTo || `${process.env.CLIENT_URL || 'http://localhost:3000'}/auth?mode=reset-password`,
+      redirectTo: redirectTo || `${config.clientUrl}/auth?mode=reset-password`,
     })
 
     if (error) {
