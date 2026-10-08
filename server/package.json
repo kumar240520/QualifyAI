@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node --max-old-space-size=384 src/server.js",
     "dev": "node --watch src/server.js",
     "capture:voice": "node scripts/capture-gemini-native-audio.js",
     "test": "node --test"

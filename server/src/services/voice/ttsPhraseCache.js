@@ -6,7 +6,7 @@ import crypto from 'crypto'
  * Key structure: SHA256(voiceId + language + style + text + modelVersion)
  */
 export class TTSPhraseCache {
-  constructor({ maxEntries = 200 } = {}) {
+  constructor({ maxEntries = 40 } = {}) {
     this.cache = new Map() // key -> { chunks: Array, totalChunks, durationMs, createdAt }
     this.maxEntries = maxEntries
     this.stats = {

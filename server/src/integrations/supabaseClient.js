@@ -43,17 +43,22 @@ export function getSupabaseClient(accessToken) {
   return createUserScopedClient(accessToken)
 }
 
+let _serviceSupabaseClient = null
+
 /**
  * Returns service role client if configured, otherwise falls back to standard client
  */
 export function getServiceSupabaseClient() {
+  if (_serviceSupabaseClient) return _serviceSupabaseClient
+
   if (config.supabase.serviceRoleKey) {
-    return createClient(config.supabase.url, config.supabase.serviceRoleKey, {
+    _serviceSupabaseClient = createClient(config.supabase.url, config.supabase.serviceRoleKey, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
       },
     })
+    return _serviceSupabaseClient
   }
   console.warn('[Supabase Warning] SUPABASE_SERVICE_ROLE_KEY is not configured; using standard client.')
   return supabase

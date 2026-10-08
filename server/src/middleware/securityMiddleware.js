@@ -12,7 +12,7 @@ import { getServiceSupabaseClient } from '../integrations/supabaseClient.js'
 // Local-only fallback used when running without the Postgres limiter during development.
 const requestBuckets = new Map()
 
-if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') setInterval(() => {
+if (!process.env.VERCEL) setInterval(() => {
   const now = Date.now()
   for (const [key, timestamps] of requestBuckets.entries()) {
     const valid = timestamps.filter((t) => now - t < 15 * 60 * 1000)

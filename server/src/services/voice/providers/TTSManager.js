@@ -25,9 +25,13 @@ export class TTSManager {
     const primary = options.primaryProvider || config.tts?.provider || 'cosyvoice'
     const fallback = options.fallbackProvider || config.tts?.fallbackProvider || 'gemini_live'
 
-    // Build fallback chain ensuring primary is first, followed by fallbacks
-    const allProviders = [primary, fallback, 'kokoro_local', 'gemini_live', 'cosyvoice']
-    this.fallbackChain = [...new Set(allProviders)]
+    // Kokoro ONNX model requires >350MB native RAM, unsafe on 512MB memory environments (e.g., Render Free Tier)
+    const isKokoroAllowed = process.env.ENABLE_KOKORO === 'true' && !process.env.RENDER
+    const allProviders = [primary, fallback, 'gemini_live', 'cosyvoice']
+    if (isKokoroAllowed) {
+      allProviders.push('kokoro_local')
+    }
+    this.fallbackChain = [...new Set(allProviders.filter(Boolean))]
     this._initialized = false
     this.metrics = {
       requests: 0,
@@ -46,22 +50,33 @@ export class TTSManager {
     await cosyvoice.initialize()
     this.registerProvider(cosyvoice)
 
-    // Pre-warm phrase cache with canonical filler & closing phrases in background for 0ms retrieval
-    ttsPhraseCache
-      .prewarm({ provider: cosyvoice, voiceProfile: DEFAULT_VOICE_PROFILE })
-      .catch((err) => {
-        console.warn('[TTSManager] Prewarming phrase cache notice:', err.message)
-      })
+    // Pre-warm phrase cache only when explicitly requested, NEVER on Render container boot
+    if (process.env.PREWARM_TTS_CACHE === 'true' && !process.env.RENDER) {
+      ttsPhraseCache
+        .prewarm({ provider: cosyvoice, voiceProfile: DEFAULT_VOICE_PROFILE })
+        .catch((err) => {
+          console.warn('[TTSManager] Prewarming phrase cache notice:', err.message)
+        })
+    }
 
-    // 2. Gemini Live TTS Provider
+    // 2. Gemini Live TTS Provider (Cloud streaming - lightweight RAM)
     const gemini = new GeminiLiveTTSProvider()
     await gemini.initialize()
     this.registerProvider(gemini)
 
-    // 3. Kokoro-82M Local ONNX Provider
-    const kokoro = new KokoroTTSProvider()
-    await kokoro.initialize()
-    this.registerProvider(kokoro)
+    // 3. Kokoro-82M Local ONNX Provider (Only when explicitly enabled and NOT on Render)
+    const isKokoroAllowed = process.env.ENABLE_KOKORO === 'true' && !process.env.RENDER
+    if (isKokoroAllowed) {
+      try {
+        const kokoro = new KokoroTTSProvider()
+        await kokoro.initialize()
+        this.registerProvider(kokoro)
+      } catch (err) {
+        console.warn('[TTSManager] Kokoro local provider disabled due to initialization error:', err.message)
+      }
+    } else {
+      console.log('[TTSManager] Kokoro local ONNX provider is disabled to preserve memory on Render (<512MB RAM).')
+    }
 
     this._initialized = true
     console.log('[TTSManager] Initialized with providers:', Array.from(this.providers.keys()))

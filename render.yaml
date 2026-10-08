@@ -28,4 +28,11 @@ services:
       - key: TTS_PROVIDER
         value: "gemini_live"
       - key: TTS_FALLBACK_PROVIDER
-        value: "kokoro_local"
+        value: "gemini_live"
+      - key: ENABLE_KOKORO
+        value: "false"
+      - key: PREWARM_TTS_CACHE
+        value: "false"
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=384"
+
