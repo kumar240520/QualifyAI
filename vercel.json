@@ -1,32 +1,25 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "services": {
-    "client": {
-      "root": "client/"
-    },
-    "server": {
-      "root": "server/",
-      "entrypoint": "index.js"
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "client/dist",
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60,
+      "memory": 1024
     }
   },
   "rewrites": [
     {
       "source": "/api",
-      "destination": {
-        "service": "server"
-      }
+      "destination": "/api/index.js"
     },
     {
       "source": "/api/(.*)",
-      "destination": {
-        "service": "server"
-      }
+      "destination": "/api/index.js"
     },
     {
       "source": "/(.*)",
-      "destination": {
-        "service": "client"
-      }
+      "destination": "/index.html"
     }
   ]
 }
