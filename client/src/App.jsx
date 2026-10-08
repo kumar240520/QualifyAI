@@ -216,7 +216,10 @@ function RecruiterDashboardView() {
 
             {/* View 2: Candidate Cohort Pipeline */}
             {workspaceView === 'candidates' && (
-              <CandidateCohortManager selectedJob={selectedCohortJob} />
+              <CandidateCohortManager
+                selectedJob={selectedCohortJob}
+                onNavigateToRequisitions={() => handleTabNavigate('/jobs')}
+              />
             )}
 
             {/* View 3: Ranked Cohort Leaderboard & Executive Analytics */}

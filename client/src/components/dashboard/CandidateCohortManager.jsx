@@ -27,7 +27,7 @@ import EvaluationScorecardModal from '../evaluation/EvaluationScorecardModal.jsx
 import { validateAddCandidate } from '../../utils/validators.js'
 import { normalizeApiError } from '../../utils/errorNormalizer.js'
 
-export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
+export default function CandidateCohortManager({ selectedJob, onSelectJob, onNavigateToRequisitions }) {
   const [jobs, setJobs] = useState([])
   const [activeJobId, setActiveJobId] = useState(selectedJob?.id || '')
   const [candidates, setCandidates] = useState([])
@@ -71,12 +71,21 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
   const fetchJobs = async () => {
     try {
       const data = await jobService.listJobs()
-      setJobs(data || [])
-      if ((!activeJobId || !data.some((j) => j.id === activeJobId)) && data && data.length > 0) {
-        setActiveJobId(data[0].id)
+      const list = data || []
+      setJobs(list)
+      if (list.length > 0) {
+        if (!activeJobId || !list.some((j) => j.id === activeJobId)) {
+          setActiveJobId(list[0].id)
+        }
+      } else {
+        setActiveJobId('')
+        setCandidates([])
+        setIsLoading(false)
       }
     } catch (err) {
       console.error('Error fetching jobs:', err)
+      setError(err.message || 'Failed to load jobs')
+      setIsLoading(false)
     }
   }
 
@@ -457,6 +466,27 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob }) {
         <div className="py-16 text-center bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
           <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
           <p className="text-xs text-slate-500">Loading candidate cohort from PostgreSQL...</p>
+        </div>
+      ) : jobs.length === 0 ? (
+        <div className="py-16 px-6 text-center bg-white rounded-2xl border border-dashed border-slate-300 shadow-xs space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto border border-blue-100">
+            <Briefcase className="w-7 h-7" />
+          </div>
+          <div className="space-y-1 max-w-sm mx-auto">
+            <h3 className="text-base font-semibold text-slate-900">No Job Requisitions Found</h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Your PostgreSQL database has zero jobs created yet. Create your first job requisition to start inviting candidate cohorts and scheduling AI interviews.
+            </p>
+          </div>
+          {onNavigateToRequisitions && (
+            <button
+              onClick={onNavigateToRequisitions}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-semibold shadow-md shadow-blue-500/20 inline-flex items-center gap-2 transition cursor-pointer"
+            >
+              <Briefcase className="w-4 h-4" />
+              Create Job Requisition
+            </button>
+          )}
         </div>
       ) : filteredCandidates.length === 0 ? (
         <div className="py-16 px-6 text-center bg-white rounded-2xl border border-dashed border-slate-300 shadow-xs space-y-4">
