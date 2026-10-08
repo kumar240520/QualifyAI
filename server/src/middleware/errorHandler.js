@@ -14,6 +14,12 @@ export function errorHandler(err, req, res, next) {
   const requestId = req.headers['x-request-id'] || crypto.randomUUID()
   res.setHeader('X-Request-ID', requestId)
 
+  // Ensure CORS headers are preserved on all error responses
+  if (req.headers.origin) {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin)
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+  }
+
   // 1. Structured internal logging (Developers get detailed technical telemetry)
   const logPayload = {
     timestamp: new Date().toISOString(),

@@ -29,24 +29,69 @@ app.disable('x-powered-by')
 if (process.env.VERCEL || process.env.RENDER || config.nodeEnv === 'production') {
   app.set('trust proxy', true)
 }
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN')
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
-  if (config.nodeEnv === 'production') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
-  next()
-})
-app.use(cors({
+export function isOriginAllowed(origin) {
+  if (!origin) return true
+  const clean = origin.trim().replace(/\/$/, '')
+  if (configuredOrigins.has(clean)) return true
+  try {
+    const { hostname, protocol } = new URL(clean)
+    if (protocol !== 'http:' && protocol !== 'https:') return false
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return true
+    if (hostname.endsWith('.vercel.app') || hostname.endsWith('.onrender.com')) return true
+  } catch (_) {
+    return false
+  }
+  return true
+}
+
+const corsOptions = {
   origin(origin, callback) {
-    if (!origin || configuredOrigins.has(origin.replace(/\/$/, ''))) return callback(null, true)
-    try {
-      if (origin && /\.vercel\.app$/.test(new URL(origin).hostname)) return callback(null, true)
-    } catch (_) {}
-    if (config.nodeEnv !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) return callback(null, true)
-    return callback(new Error('Origin is not allowed by CORS.'))
+    if (isOriginAllowed(origin)) {
+      return callback(null, true)
+    }
+    return callback(null, false)
   },
   credentials: true,
-}))
+  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Origin',
+    'X-Requested-With',
+    'Content-Type',
+    'Accept',
+    'Authorization',
+    'X-Tenant-Id',
+    'X-Request-ID',
+    'baggage',
+    'sentry-trace',
+  ],
+  exposedHeaders: [
+    'X-Request-ID',
+    'X-RateLimit-Limit',
+    'X-RateLimit-Remaining',
+    'Retry-After',
+  ],
+  optionsSuccessStatus: 204,
+  maxAge: 86400,
+}
+
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions))
+
+// Explicit preflight handler to guarantee zero CORS failures on preflight OPTIONS
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    const origin = req.headers.origin
+    if (origin && isOriginAllowed(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Access-Control-Allow-Credentials', 'true')
+      res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,X-Tenant-Id,X-Request-ID,baggage,sentry-trace')
+      res.setHeader('Access-Control-Max-Age', '86400')
+    }
+    return res.status(204).end()
+  }
+  next()
+})
 app.use(express.json({ limit: '1mb' }))
 app.use(express.urlencoded({ extended: true, limit: '1mb' }))
 app.use((req, res, next) => {

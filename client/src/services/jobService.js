@@ -25,6 +25,14 @@ async function getAuthHeaders() {
   }
 }
 
+function extractErrorMessage(data, fallback) {
+  if (!data) return fallback
+  if (typeof data.error === 'string') return data.error
+  if (data.error && typeof data.error.message === 'string') return data.error.message
+  if (typeof data.message === 'string') return data.message
+  return fallback
+}
+
 export const jobService = {
   /**
    * Fetch all jobs for the recruiter's active organization
@@ -37,7 +45,7 @@ export const jobService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to fetch job requisitions.')
+      throw new Error(extractErrorMessage(data, 'Failed to fetch job requisitions.'))
     }
     return data.data || []
   },
@@ -53,7 +61,7 @@ export const jobService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to fetch job details.')
+      throw new Error(extractErrorMessage(data, 'Failed to fetch job details.'))
     }
     return data.data
   },
@@ -70,7 +78,7 @@ export const jobService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to create job requisition.')
+      throw new Error(extractErrorMessage(data, 'Failed to create job requisition.'))
     }
     return data.data
   },
@@ -87,7 +95,7 @@ export const jobService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to parse job description with AI.')
+      throw new Error(extractErrorMessage(data, 'Failed to parse job description with AI.'))
     }
     return data.data
   },
@@ -104,7 +112,7 @@ export const jobService = {
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to update job requirements.')
+      throw new Error(extractErrorMessage(data, 'Failed to update job requirements.'))
     }
     return data.data
   },
