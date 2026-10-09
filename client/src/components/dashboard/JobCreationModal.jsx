@@ -51,11 +51,53 @@ Nice to Have:
 - Experience with eBPF profiling and Linux cgroups.
 - Open-source contributions to CNCF or Apache distributed infrastructure projects.`
 
-export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
+const BACKGROUND_OPTIONS = [
+  { value: 'TECHNICAL', label: 'Technical', desc: 'Engineering, programming, architecture, data infrastructure, and specialist technical competencies' },
+  { value: 'NON_TECHNICAL', label: 'Non-Technical', desc: 'Business reasoning, management, communication, sales, marketing, operations, and behavioral competencies' },
+]
+
+const AVAILABLE_QUESTION_TYPES = [
+  { id: 'MULTIPLE_CHOICE', label: 'Multiple Choice (Single Select)', desc: 'Candidate selects exactly one option from several choices' },
+  { id: 'MULTI_SELECT', label: 'Multiple Select', desc: 'Candidate selects one or more valid options with partial credit' },
+  { id: 'TRUE_FALSE', label: 'True / False', desc: 'Binary choice assertion and fact evaluation' },
+  { id: 'SHORT_ANSWER', label: 'Short Answer', desc: 'Brief, concise conceptual responses (1–3 sentences)' },
+  { id: 'DESCRIPTIVE', label: 'Descriptive / Open-Ended', desc: 'In-depth architectural, strategic, and trade-off reasoning' },
+  { id: 'FILL_IN_THE_BLANK', label: 'Fill in the Blank', desc: 'Missing keyword, syntax element, or formula value' },
+  { id: 'CODING_CHALLENGE', label: 'Coding Challenge', desc: 'Hands-on programming problem with description and language editor' },
+  { id: 'PREDICT_CODE_OUTPUT', label: 'Predict Code Output', desc: 'Technical code snippet analysis to determine output or state' },
+  { id: 'DEBUGGING', label: 'Debugging / Find Error', desc: 'Identify defective code, root cause explanation, and correction' },
+  { id: 'COMPLETE_THE_CODE', label: 'Complete the Code', desc: 'Incomplete code snippet with missing expressions or blocks to fill' },
+  { id: 'ARRANGE_ORDER', label: 'Arrange in Correct Order', desc: 'Reorderable workflow, lifecycle, or algorithm sequence steps' },
+  { id: 'SELECT_MOST_APPROPRIATE', label: 'Select Best Option', desc: 'Situational judgment scenario with multiple valid courses of action' },
+  { id: 'SLIDER_SCALE', label: 'Slider / Numeric Scale', desc: 'Quantitative rating or scale with configurable bounds and step' },
+  { id: 'MATCHING_PAIRS', label: 'Matching / Pairing', desc: 'Match related concepts between two sets of items' },
+  { id: 'NUMERICAL_APTITUDE', label: 'Numerical / Aptitude', desc: 'Quantitative reasoning, calculations, units, and step methodology' },
+]
+
+const DIFFICULTY_OPTIONS = [
+  { value: 'EASY', label: 'Easy (Foundational)' },
+  { value: 'MEDIUM', label: 'Medium (Standard)' },
+  { value: 'HARD', label: 'Hard (Staff / Principal)' },
+]
+
+export default function JobCreationModal({ isOpen, onClose, onJobCreated, jobToEdit = null }) {
   const [step, setStep] = useState(1) // 1: Input, 2: AI Parsing, 3: Review Extracted
   const [title, setTitle] = useState('')
   const [department, setDepartment] = useState('Core Infrastructure')
   const [seniority, setSeniority] = useState('SENIOR')
+  const [backgroundType, setBackgroundType] = useState('TECHNICAL')
+  const [customBackground, setCustomBackground] = useState('')
+  const [allowedQuestionTypes, setAllowedQuestionTypes] = useState([
+    'MULTIPLE_CHOICE',
+    'MULTI_SELECT',
+    'SHORT_ANSWER',
+    'DESCRIPTIVE',
+    'CODING_CHALLENGE',
+  ])
+  const [customQuestionTypes, setCustomQuestionTypes] = useState([])
+  const [newCustomTypeInput, setNewCustomTypeInput] = useState('')
+  const [askAboutProjects, setAskAboutProjects] = useState(true)
+  const [targetDifficulty, setTargetDifficulty] = useState('MEDIUM')
   const [description, setDescription] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -69,15 +111,111 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
   const [newSkillCategory, setNewSkillCategory] = useState('Core')
   const [newSkillLevel, setNewSkillLevel] = useState('Required')
 
+  React.useEffect(() => {
+    if (!isOpen) return
+    if (jobToEdit) {
+      setTitle(jobToEdit.title || '')
+      setDepartment(jobToEdit.department || 'Engineering')
+      setSeniority(jobToEdit.seniority || 'MID')
+      setBackgroundType(jobToEdit.background_type || 'TECHNICAL')
+      setCustomBackground(jobToEdit.custom_background || '')
+      setAllowedQuestionTypes(
+        Array.isArray(jobToEdit.allowed_question_types) && jobToEdit.allowed_question_types.length > 0
+          ? jobToEdit.allowed_question_types
+          : ['MULTIPLE_CHOICE', 'SHORT_ANSWER', 'DESCRIPTIVE']
+      )
+      setCustomQuestionTypes(Array.isArray(jobToEdit.custom_question_types) ? jobToEdit.custom_question_types : [])
+      setAskAboutProjects(jobToEdit.ask_about_projects ?? true)
+      setTargetDifficulty(jobToEdit.target_difficulty || 'MEDIUM')
+      setDescription(jobToEdit.description || '')
+      setStep(1)
+      setCreatedJob(jobToEdit)
+    } else {
+      setTitle('')
+      setDepartment('Core Infrastructure')
+      setSeniority('SENIOR')
+      setBackgroundType('TECHNICAL')
+      setCustomBackground('')
+      setAllowedQuestionTypes([
+        'MULTIPLE_CHOICE',
+        'MULTI_SELECT',
+        'SHORT_ANSWER',
+        'DESCRIPTIVE',
+        'CODING_CHALLENGE',
+      ])
+      setCustomQuestionTypes([])
+      setAskAboutProjects(true)
+      setTargetDifficulty('MEDIUM')
+      setDescription('')
+      setStep(1)
+      setCreatedJob(null)
+    }
+    setFieldErrors({})
+    setError('')
+  }, [isOpen, jobToEdit])
+
   if (!isOpen) return null
 
   const handleUseSample = () => {
     setTitle('Senior Distributed Systems Engineer')
     setDepartment('Core Infrastructure')
     setSeniority('SENIOR')
+    setBackgroundType('TECHNICAL')
+    setCustomBackground('')
+    setAllowedQuestionTypes(['SHORT_ANSWER', 'DESCRIPTIVE', 'MULTIPLE_CHOICE', 'SCENARIO'])
+    setAskAboutProjects(true)
+    setTargetDifficulty('MEDIUM')
     setDescription(SAMPLE_JD)
     setFieldErrors({})
     setError('')
+  }
+
+  const handleBackgroundChange = (newBg) => {
+    setBackgroundType(newBg)
+    if (newBg === 'TECHNICAL') {
+      setAskAboutProjects(true)
+    }
+    if (fieldErrors.custom_background) {
+      setFieldErrors((prev) => ({ ...prev, custom_background: null }))
+    }
+  }
+
+  const toggleQuestionType = (typeId) => {
+    if (allowedQuestionTypes.includes(typeId)) {
+      if (allowedQuestionTypes.length === 1 && customQuestionTypes.length === 0) {
+        setFieldErrors((prev) => ({
+          ...prev,
+          allowed_question_types: 'At least one question type must remain selected.',
+        }))
+        return
+      }
+      setAllowedQuestionTypes(allowedQuestionTypes.filter((t) => t !== typeId))
+    } else {
+      setAllowedQuestionTypes([...allowedQuestionTypes, typeId])
+      setFieldErrors((prev) => ({ ...prev, allowed_question_types: null }))
+    }
+  }
+
+  const handleAddCustomType = (e) => {
+    e?.preventDefault()
+    const clean = newCustomTypeInput.trim()
+    if (!clean) return
+    if (!customQuestionTypes.some((t) => t.toLowerCase() === clean.toLowerCase())) {
+      setCustomQuestionTypes([...customQuestionTypes, clean])
+      setFieldErrors((prev) => ({ ...prev, allowed_question_types: null }))
+    }
+    setNewCustomTypeInput('')
+  }
+
+  const handleRemoveCustomType = (typeToRemove) => {
+    const nextCustom = customQuestionTypes.filter((t) => t !== typeToRemove)
+    setCustomQuestionTypes(nextCustom)
+    if (nextCustom.length === 0 && allowedQuestionTypes.length === 0) {
+      setFieldErrors((prev) => ({
+        ...prev,
+        allowed_question_types: 'At least one question type must remain selected.',
+      }))
+    }
   }
 
   const handleStartParsing = async (e) => {
@@ -88,11 +226,14 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
       description,
       department,
       seniority,
+      background_type: backgroundType,
+      custom_background: customBackground,
+      allowed_question_types: [...allowedQuestionTypes, ...customQuestionTypes],
     })
 
     if (!validation.isValid) {
       setFieldErrors(validation.errors)
-      setError('Please provide all required fields to proceed.')
+      setError('Please review highlighted configuration errors before proceeding.')
       return
     }
 
@@ -102,12 +243,37 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
     setStep(2)
 
     try {
-      // Step A: Create the Job Requisition in Database
+      if (jobToEdit?.id) {
+        const updated = await jobService.updateJob(jobToEdit.id, {
+          title: title.trim(),
+          description: description.trim(),
+          department: department.trim(),
+          seniority,
+          background_type: backgroundType,
+          custom_background: backgroundType === 'CUSTOM' ? customBackground.trim() : null,
+          allowed_question_types: allowedQuestionTypes,
+          custom_question_types: customQuestionTypes,
+          ask_about_projects: askAboutProjects,
+          target_difficulty: targetDifficulty,
+        })
+        setCreatedJob(updated)
+        onJobCreated?.(updated)
+        onClose()
+        return
+      }
+
+      // Step A: Create the Job Requisition in Database with complete configuration
       const job = await jobService.createJob({
         title: title.trim(),
         description: description.trim(),
         department: department.trim(),
         seniority,
+        background_type: backgroundType,
+        custom_background: backgroundType === 'CUSTOM' ? customBackground.trim() : null,
+        allowed_question_types: allowedQuestionTypes,
+        custom_question_types: customQuestionTypes,
+        ask_about_projects: askAboutProjects,
+        target_difficulty: targetDifficulty,
       })
       setCreatedJob(job)
 
@@ -260,25 +426,249 @@ export default function JobCreationModal({ isOpen, onClose, onJobCreated }) {
                 </div>
               </div>
 
+              {/* Background Selection (Requirement 1) */}
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1.5">
-                  Target Seniority Level
+                  Job Background <span className="text-red-500">*</span>
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                  {SENIORITY_LEVELS.map((lvl) => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {BACKGROUND_OPTIONS.map((bg) => (
                     <button
-                      key={lvl.value}
+                      key={bg.value}
                       type="button"
-                      onClick={() => setSeniority(lvl.value)}
-                      className={`px-3 py-2 text-xs font-medium rounded-xl border text-center transition ${
-                        seniority === lvl.value
-                          ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      onClick={() => handleBackgroundChange(bg.value)}
+                      className={`p-3 text-left rounded-xl border transition ${
+                        backgroundType === bg.value
+                          ? 'bg-blue-50/70 border-blue-600 ring-1 ring-blue-600/30'
+                          : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
-                      {lvl.value}
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={`text-xs font-bold ${backgroundType === bg.value ? 'text-blue-700' : 'text-slate-800'}`}>
+                          {bg.label}
+                        </span>
+                        {backgroundType === bg.value && (
+                          <span className="w-2 h-2 rounded-full bg-blue-600" />
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 leading-relaxed">{bg.desc}</p>
                     </button>
                   ))}
+                </div>
+
+                {/* Custom Background Input (appears only when Custom is selected) */}
+                {backgroundType === 'CUSTOM' && (
+                  <div className="mt-2.5">
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      Custom Background Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Finance, Human Resources, Operations, Product Management"
+                      value={customBackground}
+                      onChange={(e) => {
+                        setCustomBackground(e.target.value)
+                        if (fieldErrors.custom_background) {
+                          setFieldErrors((prev) => ({ ...prev, custom_background: null }))
+                        }
+                      }}
+                      className={`w-full px-3.5 py-2.5 bg-slate-50 border rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
+                        fieldErrors.custom_background
+                          ? 'border-red-400 ring-2 ring-red-400/20'
+                          : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                      }`}
+                    />
+                    {fieldErrors.custom_background && (
+                      <p className="mt-1 text-xs text-red-600 font-medium">{fieldErrors.custom_background}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Target Seniority & Difficulty Controls */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Target Seniority Level
+                  </label>
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+                    {SENIORITY_LEVELS.map((lvl) => (
+                      <button
+                        key={lvl.value}
+                        type="button"
+                        onClick={() => setSeniority(lvl.value)}
+                        className={`px-2 py-2 text-[11px] font-medium rounded-xl border text-center transition ${
+                          seniority === lvl.value
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {lvl.value}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Assessment Difficulty (Requirement 9)
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {DIFFICULTY_OPTIONS.map((diff) => (
+                      <button
+                        key={diff.value}
+                        type="button"
+                        onClick={() => setTargetDifficulty(diff.value)}
+                        className={`px-2 py-2 text-xs font-medium rounded-xl border text-center transition ${
+                          targetDifficulty === diff.value
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {diff.value}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Allowed Question Types (Requirement 2) & Custom Options (Addition 1) */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-800">
+                      Permitted Question Types <span className="text-red-500">*</span>
+                    </label>
+                    <p className="text-[11px] text-slate-500">
+                      The AI will strictly only ask question types selected here.
+                    </p>
+                  </div>
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                    {allowedQuestionTypes.length + customQuestionTypes.length} Active
+                  </span>
+                </div>
+
+                {fieldErrors.allowed_question_types && (
+                  <p className="text-xs text-red-600 font-medium">{fieldErrors.allowed_question_types}</p>
+                )}
+
+                {/* Predefined Types Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {AVAILABLE_QUESTION_TYPES.map((type) => {
+                    const isSelected = allowedQuestionTypes.includes(type.id)
+                    return (
+                      <div
+                        key={type.id}
+                        onClick={() => toggleQuestionType(type.id)}
+                        className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer select-none transition ${
+                          isSelected
+                            ? 'bg-blue-50/70 border-blue-300 text-blue-900 shadow-xs'
+                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {}} // handled by parent onClick
+                          className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 pointer-events-none"
+                        />
+                        <div>
+                          <div className="text-xs font-semibold">{type.label}</div>
+                          <div className="text-[10px] text-slate-500 leading-tight">{type.desc}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Recruiter-Defined Custom Question Options (Addition 1) */}
+                <div className="pt-2 border-t border-slate-200">
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                    Recruiter-Defined Custom Question Options / Formats
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="e.g. System Design Architecture, Pitch Scenario, Budget Walkthrough"
+                      value={newCustomTypeInput}
+                      onChange={(e) => setNewCustomTypeInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          handleAddCustomType()
+                        }
+                      }}
+                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCustomType}
+                      disabled={!newCustomTypeInput.trim()}
+                      className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-900 text-white rounded-lg disabled:opacity-50 flex items-center gap-1 transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Custom
+                    </button>
+                  </div>
+
+                  {customQuestionTypes.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {customQuestionTypes.map((customType) => (
+                        <span
+                          key={customType}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium"
+                        >
+                          {customType}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCustomType(customType)}
+                            className="p-0.5 hover:text-indigo-900 rounded"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Ask About Projects / Relevant Experience Toggle (Requirement 7) */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-slate-800">
+                    Ask About Projects / Relevant Experience
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {backgroundType === 'TECHNICAL'
+                      ? 'AI will probe candidate system architecture, challenges, trade-offs, and contributions.'
+                      : 'AI will adapt inquiry to relevant campaigns, commercial initiatives, or leadership milestones.'}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAskAboutProjects(true)}
+                    className={`px-3 py-1 text-xs font-medium rounded-lg border transition ${
+                      askAboutProjects
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    Enabled
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAskAboutProjects(false)}
+                    className={`px-3 py-1 text-xs font-medium rounded-lg border transition ${
+                      !askAboutProjects
+                        ? 'bg-slate-800 text-white border-slate-800'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    Disabled
+                  </button>
                 </div>
               </div>
 

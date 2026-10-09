@@ -79,14 +79,14 @@ export default function MultiSelectQuestion({
               type="button"
               onClick={() => handleToggle(opt)}
               disabled={isSubmitting || isAiSpeaking}
-              className={`w-full text-left p-3.5 rounded-2xl border transition-all flex items-start gap-3 cursor-pointer ${
+              className={`w-full text-left p-3.5 sm:p-4 rounded-2xl border transition-all flex items-start gap-3 cursor-pointer ${
                 isSelected
                   ? 'bg-blue-50/90 border-blue-500 shadow-sm ring-1 ring-blue-500'
                   : 'bg-white hover:bg-slate-50/90 border-slate-200/90 shadow-2xs hover:border-slate-300'
               } disabled:opacity-60 disabled:cursor-not-allowed`}
             >
               <div
-                className={`w-7 h-7 rounded-xl flex items-center justify-center font-mono font-bold text-xs shrink-0 transition-all ${
+                className={`w-7 h-7 sm:w-8 sm:h-8 rounded-xl flex items-center justify-center font-mono font-bold text-xs sm:text-sm shrink-0 transition-all ${
                   isSelected
                     ? 'bg-blue-600 text-white shadow-xs'
                     : 'bg-slate-100 text-slate-600 border border-slate-200'
@@ -95,11 +95,11 @@ export default function MultiSelectQuestion({
                 {badgeKey}
               </div>
 
-              <div className="flex-1 text-xs sm:text-sm text-slate-800 leading-snug pt-0.5">
+              <div className="flex-1 text-[15px] sm:text-base text-slate-800 leading-relaxed font-sans break-words pt-0.5">
                 {opt.label}
               </div>
 
-              <div className="shrink-0 pt-0.5">
+              <div className="shrink-0 pt-1">
                 {isSelected ? (
                   <CheckSquare className="w-5 h-5 text-blue-600" />
                 ) : (

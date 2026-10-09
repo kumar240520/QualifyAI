@@ -178,21 +178,7 @@ class InterviewRoomSilenceEngine {
       return
     }
 
-    // 1. Unlimited answering time for Short Answer & Descriptive questions once candidate responds:
-    if (this.isVoiceQuestion && this.hasCandidateResponded) {
-      // Pause watchdog: 6.0s pause after speech submits
-      const timeSinceSpeech = this.currentTime - (this.lastSpeechActivityTime || 0)
-      if (this.recordedSpeech.length >= 4 && this.lastSpeechActivityTime > 0 && timeSinceSpeech >= 6000) {
-        this.submitAnswer()
-        return
-      }
-
-      // No filler words, no skip timer: candidate has unlimited formulation time!
-      this.silenceSeconds = 0
-      return
-    }
-
-    // 2. Inactivity measurement
+    // 1. Inactivity measurement from last user activity
     const idleMs = this.currentTime - (this.lastUserActivityTime || 0)
     const idleSeconds = Math.max(0, Math.floor(idleMs / 1000))
     this.silenceSeconds = idleSeconds
@@ -215,10 +201,14 @@ class InterviewRoomSilenceEngine {
       return
     }
 
-    // Step 3: Exactly stageDuration seconds of inactivity after Nudge 2 -> Skip
+    // Step 3: Exactly stageDuration seconds of inactivity after Nudge 2 -> Inactivity fallback
     if (idleSeconds >= this.stageDuration && this.nudgeCount === 2) {
       this.silenceSeconds = 0
-      this.skipUnanswered()
+      if (this.isVoiceQuestion && this.recordedSpeech.length >= 3) {
+        this.submitAnswer()
+      } else {
+        this.skipUnanswered()
+      }
       return
     }
   }
@@ -306,8 +296,18 @@ test('Interview Room Silence, Mic Policy & Activity Engine', async (t) => {
     assert.equal(engine.eventsTriggered.filter(e => e.type.startsWith('filler_')).length, 0)
     assert.equal(engine.eventsTriggered.filter(e => e.type === 'question_skipped').length, 0)
 
-    // Once candidate stops speaking and pauses for 6.0 seconds: answer submits naturally!
+    // Candidate pauses for 6.0 and 10.0 seconds to think: NO premature auto-submission!
     engine.advanceTime(6000)
+    assert.equal(engine.eventsTriggered.filter(e => e.type === 'answer_submitted').length, 0)
+    engine.advanceTime(4000)
+    assert.equal(engine.eventsTriggered.filter(e => e.type === 'answer_submitted').length, 0)
+
+    // Candidate resumes speaking after pause
+    engine.candidateSpeaks('And finally implement event-driven pub-sub architecture.')
+    assert.equal(engine.eventsTriggered.filter(e => e.type === 'answer_submitted').length, 0)
+
+    // Candidate explicitly selects Submit Response
+    engine.submitAnswer()
     assert.equal(engine.eventsTriggered.filter(e => e.type === 'answer_submitted').length, 1)
   })
 

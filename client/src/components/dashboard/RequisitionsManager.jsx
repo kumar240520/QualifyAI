@@ -15,6 +15,9 @@ import {
   FileText,
   Sliders,
   RefreshCw,
+  Trash2,
+  X,
+  Edit3,
 } from 'lucide-react'
 import { jobService } from '../../services/jobService.js'
 import JobCreationModal from './JobCreationModal.jsx'
@@ -26,6 +29,13 @@ export default function RequisitionsManager({ onSelectJob }) {
   const [error, setError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [jobToEdit, setJobToEdit] = useState(null)
+
+  // Job deletion state (Requirement 3)
+  const [jobToDelete, setJobToDelete] = useState(null)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   const fetchJobs = async () => {
     setIsLoading(true)
@@ -54,6 +64,31 @@ export default function RequisitionsManager({ onSelectJob }) {
 
   const handleJobCreated = (newJob) => {
     fetchJobs()
+  }
+
+  const handleOpenDelete = (job, e) => {
+    e?.stopPropagation()
+    setJobToDelete(job)
+    setDeleteConfirmText('')
+    setDeleteError('')
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!jobToDelete || deleteConfirmText !== 'DELETE') return
+    setIsDeleting(true)
+    setDeleteError('')
+    try {
+      await jobService.deleteJob(jobToDelete.id)
+      setJobToDelete(null)
+      setDeleteConfirmText('')
+      await fetchJobs()
+    } catch (err) {
+      console.error('Delete job error:', err)
+      const norm = normalizeApiError(err, 'Failed to delete job position.')
+      setDeleteError(norm.message)
+    } finally {
+      setIsDeleting(false)
+    }
   }
 
   return (
@@ -201,6 +236,14 @@ export default function RequisitionsManager({ onSelectJob }) {
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-100">
                       {job.seniority || 'MID'}
                     </span>
+                    {/* Background badge (Requirement 1) */}
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-100">
+                      {job.background_type === 'CUSTOM' ? (job.custom_background || 'Custom') : (job.background_type || 'Technical')}
+                    </span>
+                    {/* Difficulty badge (Requirement 9) */}
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
+                      {job.target_difficulty || 'MEDIUM'}
+                    </span>
                     <span
                       className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider border ${
                         job.status === 'ACTIVE'
@@ -225,6 +268,11 @@ export default function RequisitionsManager({ onSelectJob }) {
                       <span className="flex items-center gap-1">
                         <Award className="w-3.5 h-3.5 text-slate-400" />
                         {reqs.experience_years}+ Yrs Exp
+                      </span>
+                    )}
+                    {Array.isArray(job.allowed_question_types) && job.allowed_question_types.length > 0 && (
+                      <span className="text-[11px] text-slate-400">
+                        {job.allowed_question_types.length} Question Types Permitted
                       </span>
                     )}
                   </div>
@@ -252,6 +300,14 @@ export default function RequisitionsManager({ onSelectJob }) {
                 {/* Card Action Buttons */}
                 <div className="flex items-center gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
                   <button
+                    onClick={() => { setJobToEdit(job); setIsModalOpen(true); }}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 text-slate-700 hover:text-blue-700 hover:bg-blue-50 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    title="Edit Position Requisition & Question Types"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Edit Position</span>
+                  </button>
+                  <button
                     onClick={() => onSelectJob?.(job, 'rubric')}
                     className="px-3.5 py-2 rounded-xl border border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-50 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
                   >
@@ -265,6 +321,14 @@ export default function RequisitionsManager({ onSelectJob }) {
                     <span>Candidates</span>
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
+                  {/* Delete Position Button (Requirement 3) */}
+                  <button
+                    onClick={(e) => handleOpenDelete(job, e)}
+                    className="p-2 rounded-xl border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-200 hover:bg-red-50 text-xs font-semibold transition cursor-pointer"
+                    title="Delete Position Requisition"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             )
@@ -272,11 +336,91 @@ export default function RequisitionsManager({ onSelectJob }) {
         </div>
       )}
 
+      {/* Requisition Deletion Confirmation Modal (Requirement 3) */}
+      {jobToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md">
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-semibold text-slate-900">Delete Job Position</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Position: <span className="font-semibold text-slate-800">{jobToDelete.title}</span> ({jobToDelete.department || 'Engineering'})
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setJobToDelete(null)
+                  setDeleteConfirmText('')
+                  setDeleteError('')
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs leading-relaxed">
+              <strong>Warning:</strong> Deleting this position will archive it and remove it from active lists. Associated invitations and candidate records will be affected. Historical completed interview records remain preserved.
+            </div>
+
+            {deleteError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
+                {deleteError}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-1.5">
+                Type <span className="font-mono text-red-600 font-bold">DELETE</span> to confirm:
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                placeholder="DELETE"
+                autoFocus
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-500 transition"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setJobToDelete(null)
+                  setDeleteConfirmText('')
+                  setDeleteError('')
+                }}
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-medium hover:bg-slate-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={deleteConfirmText !== 'DELETE' || isDeleting}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+              >
+                {isDeleting ? 'Deleting...' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal */}
       <JobCreationModal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        onClose={() => {
+          setIsModalOpen(false)
+          setJobToEdit(null)
+        }}
         onJobCreated={handleJobCreated}
+        jobToEdit={jobToEdit}
       />
     </div>
   )

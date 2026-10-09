@@ -69,6 +69,8 @@ export class AudioPlaybackEngine {
     this.progressTimer = null
     this.state = 'IDLE' // 'IDLE' | 'PLAYING' | 'DRAINING' | 'PAUSED' | 'ERROR' | 'DESTROYED'
     this.turnId = null
+    this.turnSequence = null
+    this.isFirstBufferOfTurn = true
     this.streamComplete = false
     this.playbackStarted = false
     this.playbackCompletionSent = false
@@ -177,10 +179,12 @@ export class AudioPlaybackEngine {
   /**
    * Starts a new audio turn. Flushes previous audio sources cleanly.
    */
-  beginTurn(turnId) {
+  beginTurn(turnId, sequence = null) {
     if (turnId != null && this.turnId === turnId) return
     this.flush()
     this.turnId = turnId ?? `audio-turn-${Date.now()}`
+    this.turnSequence = sequence
+    this.isFirstBufferOfTurn = true
     this.streamComplete = false
     this.playbackStarted = false
     this.playbackCompletionSent = false
@@ -191,7 +195,7 @@ export class AudioPlaybackEngine {
     this.pendingFrames = 0
     this.state = 'IDLE'
     this.stats = this._newStats()
-    this._logEvent('audio_started', { turnId: this.turnId })
+    this._logEvent('audio_started', { turnId: this.turnId, sequence })
   }
 
   /**
@@ -201,9 +205,20 @@ export class AudioPlaybackEngine {
     this.enqueueChain = this.enqueueChain
       .then(async () => {
         if (this.isDestroyed || this.streamComplete) return
-        // Reject stale turn audio
+        // Reject stale turn audio or older sequence chunks
         if (payload?.audioTurnId != null && payload.audioTurnId !== this.turnId) {
           this._logEvent('audio_stale', { receivedTurnId: payload.audioTurnId, currentTurnId: this.turnId })
+          return
+        }
+        if (
+          typeof payload?.questionSequence === 'number' &&
+          typeof this.turnSequence === 'number' &&
+          payload.questionSequence < this.turnSequence
+        ) {
+          this._logEvent('audio_stale_sequence', {
+            receivedSequence: payload.questionSequence,
+            currentSequence: this.turnSequence,
+          })
           return
         }
 
@@ -279,15 +294,15 @@ export class AudioPlaybackEngine {
   }
 
   _parseFormat(payload) {
-    const mimeType = String(payload?.mimeType || '')
+    const mimeType = String(payload?.mimeType || 'audio/pcm;rate=24000')
     if (!/^audio\/pcm(?:;|$)/i.test(mimeType)) {
       throw new Error(`Unsupported audio MIME type: ${mimeType || '(missing)'}.`)
     }
     const mimeRate = mimeType.match(/(?:^|;)\s*rate=(\d+)/i)
-    const sampleRate = Number(mimeRate?.[1] || payload.sampleRate)
-    const channels = Number(payload.channels)
-    const bitDepth = Number(payload.bitDepth)
-    const byteOrder = String(payload.byteOrder || payload.endianness || '').toLowerCase()
+    const sampleRate = Number(mimeRate?.[1] || payload?.sampleRate || 24000)
+    const channels = Number(payload?.channels || 1)
+    const bitDepth = Number(payload?.bitDepth || 16)
+    const byteOrder = String(payload?.byteOrder || payload?.endianness || 'le').toLowerCase()
 
     if (!Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 192000) {
       throw new Error(`Invalid PCM sample rate: ${sampleRate}.`)
@@ -301,7 +316,7 @@ export class AudioPlaybackEngine {
     if (!['little-endian', 'le'].includes(byteOrder)) {
       throw new Error(`Unsupported PCM byte order: ${byteOrder || '(missing)'}.`)
     }
-    return { mimeType, encoding: 'signed-integer PCM', sampleRate, channels, bitDepth, byteOrder: 'little-endian' }
+    return { mimeType: `audio/pcm;rate=${sampleRate}`, encoding: 'signed-integer PCM', sampleRate, channels, bitDepth, byteOrder: 'little-endian' }
   }
 
   _sameFormat(left, right) {
@@ -371,18 +386,30 @@ export class AudioPlaybackEngine {
 
     while (this.pendingFrames >= targetFrames || (flush && this.pendingFrames > 0)) {
       const frameCount = Math.min(targetFrames, this.pendingFrames)
+      const isLastBuffer = flush && (this.pendingFrames - frameCount === 0)
+      const isFirstBuffer = this.isFirstBufferOfTurn
+      this.isFirstBufferOfTurn = false
+
       const audioBuffer = this.audioContext.createBuffer(this.formats.channels, frameCount, this.formats.sampleRate)
 
       this.pendingChannels.forEach((samples, channel) => {
         const slice = samples.subarray(0, frameCount)
 
-        // Micro-crossfade edge smoothing (24 samples cosine taper) at buffer boundaries
-        // to prevent metallic impulse clicks at chunk borders
-        const fadeLen = Math.min(24, Math.floor(frameCount / 4))
-        if (fadeLen > 0) {
+        // Only apply smooth micro-fades at the extreme edges of the audio stream:
+        // - Ramp up on the very first buffer of the turn from zero silence (eliminates DC offset click)
+        // - Ramp down on the final buffer when flushing stream to zero silence
+        // Continuous PCM buffers within the stream are completely unaltered linear PCM.
+        if (isFirstBuffer) {
+          const fadeLen = Math.min(48, Math.floor(frameCount / 4))
           for (let k = 0; k < fadeLen; k++) {
             const factor = 0.5 * (1 - Math.cos((Math.PI * k) / fadeLen))
             slice[k] *= factor
+          }
+        }
+        if (isLastBuffer) {
+          const fadeLen = Math.min(48, Math.floor(frameCount / 4))
+          for (let k = 0; k < fadeLen; k++) {
+            const factor = 0.5 * (1 - Math.cos((Math.PI * k) / fadeLen))
             slice[frameCount - 1 - k] *= factor
           }
         }
@@ -544,6 +571,22 @@ export class AudioPlaybackEngine {
     }
     this.streamComplete = true
     this._makeBuffers(true)
+
+    // Soft micro fade-out at the absolute concluding edge of the stream to eliminate DC offset pop
+    const targetSource = Array.from(this.activeSources).pop()
+    const targetBuf = targetSource?.buffer || this.queue[this.queue.length - 1]
+    if (targetBuf && typeof targetBuf.getChannelData === 'function') {
+      const frameCount = targetBuf.length
+      const fadeLen = Math.min(48, Math.floor(frameCount / 4))
+      for (let ch = 0; ch < targetBuf.numberOfChannels; ch++) {
+        const data = targetBuf.getChannelData(ch)
+        for (let k = 0; k < fadeLen; k++) {
+          const factor = 0.5 * (1 - Math.cos((Math.PI * k) / fadeLen))
+          data[frameCount - 1 - k] *= factor
+        }
+      }
+    }
+
     this.state = this.playbackStarted ? 'DRAINING' : 'IDLE'
     this._schedule()
     this._maybeCompletePlayback()
@@ -605,6 +648,9 @@ export class AudioPlaybackEngine {
         this._maybeCompletePlayback(true)
       }
     }, 60)
+    if (typeof this.progressTimer?.unref === 'function') {
+      this.progressTimer.unref()
+    }
   }
 
   _stopProgressTracker() {
@@ -686,6 +732,8 @@ export class AudioPlaybackEngine {
     this.streamComplete = false
     this.playbackStarted = false
     this.playbackCompletionSent = false
+    this.isFirstBufferOfTurn = true
+    this.turnSequence = null
     if (!this.isDestroyed) this.state = 'IDLE'
   }
 

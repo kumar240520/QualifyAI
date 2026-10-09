@@ -420,6 +420,7 @@ export const candidateService = {
         token: invitation.token,
         status: invitation.status,
         expires_at: invitation.expires_at,
+        interview_duration_minutes: invitation.interview_duration_minutes,
       },
       job: {
         id: invitation.jobs?.id,
@@ -507,6 +508,74 @@ export const candidateService = {
       success: true,
       message: 'Invitation successfully accepted and candidate details registered.',
       invitation: updated,
+    }
+  },
+
+  /**
+   * Delete / remove candidate from job requisition cohort safely
+   */
+  async deleteCandidate({ jobId, candidateId, organizationId, userToken }) {
+    const supabase = userToken ? getSupabaseClient(userToken) : getServiceSupabaseClient()
+    await this._verifyJobBelongsToOrg(jobId, organizationId, supabase)
+
+    // Verify candidate belongs to the active organization
+    const { data: candidate, error: candError } = await supabase
+      .from('candidates')
+      .select('id, full_name, email, organization_id')
+      .eq('id', candidateId)
+      .eq('organization_id', organizationId)
+      .maybeSingle()
+
+    if (candError || !candidate) {
+      throw new NotFoundError('Candidate not found or unauthorized.')
+    }
+
+    // 1. Remove or cancel non-completed invitations for this job
+    await supabase
+      .from('invitations')
+      .delete()
+      .eq('job_id', jobId)
+      .eq('candidate_id', candidateId)
+      .neq('status', 'COMPLETED')
+
+    // 2. Remove non-completed interviews for this job
+    await supabase
+      .from('interviews')
+      .delete()
+      .eq('job_id', jobId)
+      .eq('candidate_id', candidateId)
+      .neq('status', 'COMPLETED')
+
+    // 3. Remove application association for this job
+    const { error: appDeleteErr } = await supabase
+      .from('applications')
+      .delete()
+      .eq('job_id', jobId)
+      .eq('candidate_id', candidateId)
+
+    if (appDeleteErr) {
+      console.error('[deleteCandidate] Application delete error:', appDeleteErr.message)
+      throw new Error(`Failed to remove candidate application: ${appDeleteErr.message}`)
+    }
+
+    // 4. Check if candidate has applications in other jobs of this organization
+    const { data: otherApps } = await supabase
+      .from('applications')
+      .select('id')
+      .eq('candidate_id', candidateId)
+
+    if (!otherApps || otherApps.length === 0) {
+      // Mark candidate soft-deleted so historical interview records are preserved
+      await supabase
+        .from('candidates')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', candidateId)
+    }
+
+    return {
+      success: true,
+      id: candidateId,
+      message: `Candidate ${candidate.full_name} successfully removed from requisition.`,
     }
   },
 }

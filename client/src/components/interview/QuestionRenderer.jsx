@@ -1,18 +1,27 @@
 import React from 'react'
-import DescriptiveQuestion from './questions/DescriptiveQuestion.jsx'
 import MultipleChoiceQuestion from './questions/MultipleChoiceQuestion.jsx'
 import MultiSelectQuestion from './questions/MultiSelectQuestion.jsx'
-import FillBlankQuestion from './questions/FillBlankQuestion.jsx'
-import CodeOutputQuestion from './questions/CodeOutputQuestion.jsx'
-import CodeWritingQuestion from './questions/CodeWritingQuestion.jsx'
-import SQLQuestion from './questions/SQLQuestion.jsx'
 import BooleanQuestion from './questions/BooleanQuestion.jsx'
+import ShortAnswerQuestion from './questions/ShortAnswerQuestion.jsx'
+import DescriptiveQuestion from './questions/DescriptiveQuestion.jsx'
+import FillBlankQuestion from './questions/FillBlankQuestion.jsx'
+import CodeWritingQuestion from './questions/CodeWritingQuestion.jsx'
+import CodeOutputQuestion from './questions/CodeOutputQuestion.jsx'
+import DebuggingQuestion from './questions/DebuggingQuestion.jsx'
+import CompleteCodeQuestion from './questions/CompleteCodeQuestion.jsx'
+import ArrangeOrderQuestion from './questions/ArrangeOrderQuestion.jsx'
+import SelectMostAppropriateQuestion from './questions/SelectMostAppropriateQuestion.jsx'
+import SliderScaleQuestion from './questions/SliderScaleQuestion.jsx'
+import MatchingPairsQuestion from './questions/MatchingPairsQuestion.jsx'
+import NumericalAptitudeQuestion from './questions/NumericalAptitudeQuestion.jsx'
+import SQLQuestion from './questions/SQLQuestion.jsx'
 import ScenarioQuestion from './questions/ScenarioQuestion.jsx'
 import BehavioralQuestion from './questions/BehavioralQuestion.jsx'
+import { normalizeQuestionType } from '../../utils/questionTypeRegistry.js'
 
 /**
- * QuestionRenderer - Dynamic Question Interaction Engine
- * Renders tailored interactive answer surfaces based on the normalized question model
+ * QuestionRenderer - Central Dynamic Question Interaction Engine
+ * Renders dedicated interactive candidate surfaces for all 15 supported question types.
  */
 export default function QuestionRenderer({
   question,
@@ -41,29 +50,57 @@ export default function QuestionRenderer({
     isAiSpeaking,
   }
 
-  switch (question.type) {
+  const normalizedType = normalizeQuestionType(question.type)
+
+  switch (normalizedType) {
     case 'MULTIPLE_CHOICE':
-    case 'SINGLE_CHOICE':
       return <MultipleChoiceQuestion {...commonProps} />
 
     case 'MULTI_SELECT':
       return <MultiSelectQuestion {...commonProps} />
 
+    case 'TRUE_FALSE':
+      return <BooleanQuestion {...commonProps} />
+
+    case 'SHORT_ANSWER':
+      return <ShortAnswerQuestion {...commonProps} />
+
+    case 'DESCRIPTIVE':
+      return <DescriptiveQuestion {...commonProps} />
+
     case 'FILL_IN_THE_BLANK':
       return <FillBlankQuestion {...commonProps} />
 
-    case 'CODE_OUTPUT':
-      return <CodeOutputQuestion {...commonProps} />
-
-    case 'CODE_WRITING':
+    case 'CODING_CHALLENGE':
       return <CodeWritingQuestion {...commonProps} />
 
+    case 'PREDICT_CODE_OUTPUT':
+      return <CodeOutputQuestion {...commonProps} />
+
+    case 'DEBUGGING':
+      return <DebuggingQuestion {...commonProps} />
+
+    case 'COMPLETE_THE_CODE':
+      return <CompleteCodeQuestion {...commonProps} />
+
+    case 'ARRANGE_ORDER':
+      return <ArrangeOrderQuestion {...commonProps} />
+
+    case 'SELECT_MOST_APPROPRIATE':
+      return <SelectMostAppropriateQuestion {...commonProps} />
+
+    case 'SLIDER_SCALE':
+      return <SliderScaleQuestion {...commonProps} />
+
+    case 'MATCHING_PAIRS':
+      return <MatchingPairsQuestion {...commonProps} />
+
+    case 'NUMERICAL_APTITUDE':
+      return <NumericalAptitudeQuestion {...commonProps} />
+
+    // Legacy / Specialized formats
     case 'SQL':
       return <SQLQuestion {...commonProps} />
-
-    case 'TRUE_FALSE':
-    case 'YES_NO':
-      return <BooleanQuestion {...commonProps} />
 
     case 'SCENARIO':
       return <ScenarioQuestion {...commonProps} />
@@ -71,8 +108,12 @@ export default function QuestionRenderer({
     case 'BEHAVIORAL':
       return <BehavioralQuestion {...commonProps} />
 
-    case 'DESCRIPTIVE':
     default:
-      return <DescriptiveQuestion {...commonProps} />
+      return (
+        <div className="p-6 text-center bg-red-50/60 border border-red-200 rounded-2xl text-red-700 font-sans space-y-2">
+          <p className="font-bold text-sm">Unsupported Question Format: &ldquo;{question.type}&rdquo;</p>
+          <p className="text-xs text-slate-600">This question type does not match any configured template. Please notify your interview proctor or recruiter.</p>
+        </div>
+      )
   }
 }

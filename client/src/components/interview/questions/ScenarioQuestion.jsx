@@ -4,19 +4,21 @@ import { AlertCircle, Send, Loader2, Mic, CornerDownLeft, Server } from 'lucide-
 export default function ScenarioQuestion({
   question,
   value = '',
+  candidateSpeech = '',
   onChange,
   onSubmit,
   isSubmitting = false,
   isAiSpeaking = false,
 }) {
   const textareaRef = useRef(null)
+  const textValue = typeof value === 'string' ? value : value?.text || ''
 
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 120), 260)}px`
-  }, [value])
+  }, [textValue])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {

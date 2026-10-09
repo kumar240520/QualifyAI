@@ -169,8 +169,10 @@ ${structuredText}`
               if (part.thought) continue
 
               if (part.inlineData && part.inlineData.mimeType?.startsWith('audio/')) {
-                const mimeType = part.inlineData.mimeType
-                const sampleRate = Number(mimeType.match(/(?:^|;)\s*rate=(\d+)/i)?.[1]) || null
+                const rawMime = part.inlineData.mimeType
+                const rateMatch = rawMime.match(/(?:^|;)\s*rate=(\d+)/i)
+                const sampleRate = Number(rateMatch?.[1]) || 24000
+                const mimeType = rawMime.includes('rate=') ? rawMime : `audio/pcm;rate=${sampleRate}`
                 chunkCount++
                 if (typeof onChunk === 'function') {
                   onChunk({

@@ -4,6 +4,7 @@ import { Send, Loader2, Mic, CornerDownLeft } from 'lucide-react'
 export default function DescriptiveQuestion({
   question,
   value = '',
+  candidateSpeech = '',
   onChange,
   onSubmit,
   isSubmitting = false,
@@ -11,6 +12,7 @@ export default function DescriptiveQuestion({
   placeholder = 'Type your technical answer here, or speak into your microphone...',
 }) {
   const textareaRef = useRef(null)
+  const textValue = typeof value === 'string' ? value : value?.text || ''
 
   // Auto-resize textarea height as content expands
   useEffect(() => {
@@ -18,14 +20,24 @@ export default function DescriptiveQuestion({
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 120), 280)}px`
-  }, [value])
+  }, [textValue])
+
+  // Sync spoken transcript into textarea when candidate speaks
+  useEffect(() => {
+    if (candidateSpeech && typeof candidateSpeech === 'string' && candidateSpeech.trim()) {
+      const clean = candidateSpeech.trim()
+      if (clean !== textValue.trim()) {
+        onChange({ text: clean, inputMethod: 'voice_text' })
+      }
+    }
+  }, [candidateSpeech])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      if (value.trim() && !isSubmitting && !isAiSpeaking) {
+      if (textValue.trim() && !isSubmitting && !isAiSpeaking) {
         onSubmit({
-          text: value.trim(),
+          text: textValue.trim(),
           inputMethod: 'text',
         })
       }
@@ -34,9 +46,9 @@ export default function DescriptiveQuestion({
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (value.trim() && !isSubmitting && !isAiSpeaking) {
+    if (textValue.trim() && !isSubmitting && !isAiSpeaking) {
       onSubmit({
-        text: value.trim(),
+        text: textValue.trim(),
         inputMethod: 'text',
       })
     }
@@ -44,10 +56,10 @@ export default function DescriptiveQuestion({
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3 w-full">
-      <div className="relative rounded-2xl bg-white border border-slate-200/90 shadow-2xs focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/10 transition-all p-3.5">
+      <div className="relative rounded-2xl bg-white border border-slate-200/90 shadow-2xs focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/10 transition-all p-3.5 sm:p-4">
         <textarea
           ref={textareaRef}
-          value={value}
+          value={textValue}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={isSubmitting || isAiSpeaking}
@@ -56,7 +68,7 @@ export default function DescriptiveQuestion({
               ? 'AI Interviewer is speaking... please listen.'
               : placeholder
           }
-          className="w-full text-xs sm:text-sm text-slate-800 placeholder-slate-400 bg-transparent resize-none focus:outline-none leading-relaxed disabled:opacity-60 disabled:cursor-not-allowed font-sans min-h-[120px]"
+          className="w-full text-[15px] sm:text-base text-slate-800 placeholder-slate-400 bg-transparent resize-none focus:outline-none leading-relaxed disabled:opacity-60 disabled:cursor-not-allowed font-sans min-h-[120px]"
         />
 
         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-400">

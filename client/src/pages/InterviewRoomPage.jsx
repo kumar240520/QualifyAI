@@ -28,6 +28,8 @@ import {
   extractCleanQuestionPrompt,
 } from '../utils/questionNormalizer.js'
 import { getQuestionEventSequence, shouldAcceptQuestionEvent } from '../utils/questionEvent.js'
+import { checkDeviceCompatibility } from '../utils/deviceCompatibility.js'
+import DesktopRequiredScreen from '../components/common/DesktopRequiredScreen.jsx'
 
 // Subcomponents
 import InterviewHeader from '../components/interview/InterviewHeader.jsx'
@@ -35,36 +37,21 @@ import AIInterviewerPanel from '../components/interview/AIInterviewerPanel.jsx'
 import ActiveQuestionPanel from '../components/interview/ActiveQuestionPanel.jsx'
 import QuestionRenderer from '../components/interview/QuestionRenderer.jsx'
 import ConversationStream from '../components/interview/ConversationStream.jsx'
+import { appendSpeechSegment } from '../utils/speechAccumulator.js'
 
-const NON_VOICE_INTERACTIVE_TYPES = [
-  'MULTIPLE_CHOICE',
-  'SINGLE_CHOICE',
-  'MULTI_SELECT',
-  'FILL_IN_THE_BLANK',
-  'CODE_OUTPUT',
-  'CODE_WRITING',
-  'SQL',
-  'TRUE_FALSE',
-  'YES_NO',
-]
+import { isMicDefaultOn } from '../utils/questionTypeRegistry.js'
 
 /**
  * Authoritative default microphone policy:
- * - SHORT_ANSWER, DESCRIPTIVE, BEHAVIORAL, SCENARIO → microphone strictly ON by default (true)
- * - Structured non-voice widget questions (MCQ, Coding, SQL, etc.) → microphone OFF by default (false)
+ * - SHORT_ANSWER, DESCRIPTIVE → microphone strictly ON by default (true)
+ * - Every other question type (MCQ, Coding, SQL, Sliders, Ordering, Debugging, etc.) → microphone OFF by default (false)
  */
 function getDefaultMicEnabled(questionOrType) {
-  if (!questionOrType) return true
-  const t = typeof questionOrType === 'string'
-    ? questionOrType.toUpperCase()
-    : String(questionOrType.type || questionOrType.question_type || '').toUpperCase()
-
-  if (!t) return true
-  return !NON_VOICE_INTERACTIVE_TYPES.includes(t)
+  return isMicDefaultOn(questionOrType)
 }
 
 function isLongFormVoiceQuestion(questionOrType) {
-  return getDefaultMicEnabled(questionOrType)
+  return isMicDefaultOn(questionOrType)
 }
 
 /**
@@ -178,6 +165,9 @@ export default function InterviewRoomPage() {
   const { token } = useParams()
   const navigate = useNavigate()
 
+  // Hardware compatibility gate: Desktop / PC required (Requirement 10)
+  const [deviceCheck] = useState(() => checkDeviceCompatibility())
+
   // Core Session State & Canonical Sequencing
   const [session, setSession] = useState(null)
   const [transcripts, setTranscripts] = useState([])
@@ -199,6 +189,7 @@ export default function InterviewRoomPage() {
   const candidateAiRatingRef = useRef(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false)
   const [error, setError] = useState('')
   const [isCompleted, setIsCompleted] = useState(false)
   const isCompletedRef = useRef(false)
@@ -211,6 +202,9 @@ export default function InterviewRoomPage() {
   answerInputValueRef.current = answerInputValue
   const [candidateInterimText, setCandidateInterimText] = useState('')
   const candidateSpeechBufferRef = useRef('')
+  const currentInterimSpeechRef = useRef('')
+  const finalizedSegmentIdsRef = useRef(new Set())
+  const lastFinalizedSegmentRef = useRef('')
 
   // Secondary Conversation Drawer State
   const [isConversationDrawerOpen, setIsConversationDrawerOpen] = useState(false)
@@ -291,7 +285,11 @@ export default function InterviewRoomPage() {
     const pending = pendingAiSpeechRef.current
     if (!pending || !engine?.hasEnteredRoom) return
     pendingAiSpeechRef.current = null
-    engine.speakAiQuestion(pending.text)
+    engine.speakAiQuestion({
+      text: pending.text,
+      questionId: pending.questionId || null,
+      sequence: pending.sequence,
+    })
   }
 
   // Progressively reveal spoken script synchronously with speech playback
@@ -372,6 +370,9 @@ export default function InterviewRoomPage() {
       scriptFallbackTickerRef.current = null
     }
     candidateSpeechBufferRef.current = ''
+    currentInterimSpeechRef.current = ''
+    finalizedSegmentIdsRef.current.clear()
+    lastFinalizedSegmentRef.current = ''
     setCandidateInterimText('')
     lastSpeechActivityTimeRef.current = 0
     lastScheduledTextRef.current = ''
@@ -582,6 +583,9 @@ export default function InterviewRoomPage() {
     // Reset candidate answer inputs and speech buffers for a clean response window
     setAnswerInputValue('')
     candidateSpeechBufferRef.current = ''
+    currentInterimSpeechRef.current = ''
+    finalizedSegmentIdsRef.current.clear()
+    lastFinalizedSegmentRef.current = ''
     setCandidateInterimText('')
     lastScheduledTextRef.current = ''
     lastSpeechActivityTimeRef.current = 0
@@ -608,22 +612,14 @@ export default function InterviewRoomPage() {
     manualMicOverrideRef.current = false
     setManualMicOverride(false)
 
-    // Apply default mic policy immediately for newly active question
+    // Apply default mic policy for candidate response stage (kept locked & muted while AI speaks)
     const defaultMicOn = getDefaultMicEnabled(normalized)
     const initialMicMuted = !defaultMicOn
     autoMutedForNonDescriptiveRef.current = initialMicMuted
     setIsMuted(initialMicMuted)
     isMutedRef.current = initialMicMuted
     if (voiceEngineRef.current) {
-      if (defaultMicOn) {
-        if (typeof voiceEngineRef.current.unmuteAndStartListening === 'function') {
-          voiceEngineRef.current.unmuteAndStartListening()
-        } else {
-          voiceEngineRef.current.setMicrophoneMuted(false)
-        }
-      } else {
-        voiceEngineRef.current.setMicrophoneMuted(true)
-      }
+      voiceEngineRef.current.setMicrophoneMuted(true)
     }
 
     if (typeof event.remainingSeconds === 'number') {
@@ -642,9 +638,13 @@ export default function InterviewRoomPage() {
 
     if (spokenLeadIn && event.speakAloud !== false) {
       if (voiceEngineRef.current?.hasEnteredRoom) {
-        voiceEngineRef.current.speakAiQuestion(spokenLeadIn)
+        voiceEngineRef.current.speakAiQuestion({
+          text: spokenLeadIn,
+          questionId: qObj.id || null,
+          sequence: incomingSeq,
+        })
       } else {
-        pendingAiSpeechRef.current = { text: spokenLeadIn, sequence: incomingSeq }
+        pendingAiSpeechRef.current = { text: spokenLeadIn, questionId: qObj.id || null, sequence: incomingSeq }
       }
     } else if (event.speakAloud === false) {
       // If voice engine is explicitly not speaking aloud, unlock candidate after brief reading delay (1.5s)
@@ -656,6 +656,11 @@ export default function InterviewRoomPage() {
 
   // Initialize Interview Session
   const initInterview = async () => {
+    if (!deviceCheck.isDesktop) {
+      setIsLoading(false)
+      return
+    }
+
     if (!token) {
       setError('Invitation token is missing.')
       setIsLoading(false)
@@ -709,23 +714,19 @@ export default function InterviewRoomPage() {
         setIsMuted(initialMicMuted)
         isMutedRef.current = initialMicMuted
         if (voiceEngineRef.current) {
-          if (defaultMicOn) {
-            if (typeof voiceEngineRef.current.unmuteAndStartListening === 'function') {
-              voiceEngineRef.current.unmuteAndStartListening()
-            } else {
-              voiceEngineRef.current.setMicrophoneMuted(false)
-            }
-          } else {
-            voiceEngineRef.current.setMicrophoneMuted(true)
-          }
+          voiceEngineRef.current.setMicrophoneMuted(true)
         }
         const spokenLead = data.currentQuestion?.spoken_lead_in || initialQ
         startScriptReveal(spokenLead)
         isCandidateTurnLockedRef.current = true
         setVoiceState('SPEAKING')
-        pendingAiSpeechRef.current = { text: spokenLead, sequence: hydratedSeq }
+        pendingAiSpeechRef.current = { text: spokenLead, sequence: hydratedSeq, questionId: data.currentQuestion?.id || null }
         if (voiceEngineRef.current?.hasEnteredRoom) {
-          voiceEngineRef.current.speakAiQuestion(spokenLead)
+          voiceEngineRef.current.speakAiQuestion({
+            text: spokenLead,
+            sequence: hydratedSeq,
+            questionId: data.currentQuestion?.id || null,
+          })
         }
 
         setTranscripts((prev) => {
@@ -766,19 +767,39 @@ export default function InterviewRoomPage() {
     const timer = setInterval(() => {
       setRemainingSeconds((previous) => {
         const next = Math.max(0, previous - 1)
-        if (next <= 120 && next > 0 && !hasRequestedWrapUpRef.current) {
+        if (next <= 60 && next > 0 && !hasRequestedWrapUpRef.current) {
           hasRequestedWrapUpRef.current = true
           interviewService.startWrapUp(session.id, token).then((result) => {
             if (result.isCompleted) {
               setIsCompleted(true)
               return
             }
-            if (result.session) setSession(result.session)
+            if (result.session) {
+              setSession((prev) => ({
+                ...prev,
+                ...result.session,
+                job: result.session?.job || prev?.job,
+                candidate: result.session?.candidate || prev?.candidate,
+                organization: result.session?.organization || prev?.organization,
+              }))
+            }
             if (result.coverageMatrix) setCoverageMatrix(result.coverageMatrix)
             setWrapUpStarted(true)
-            if (result.nextQuestion) {
-              handleIncomingAiQuestion({ sequence: result.sequence, question: result.nextQuestion, remainingSeconds: result.remainingSeconds, speakAloud: true })
+            if (silenceTimerRef.current) {
+              clearInterval(silenceTimerRef.current)
+              silenceTimerRef.current = null
             }
+            if (voiceEngineRef.current) {
+              voiceEngineRef.current.cancelCurrentAudio('Transition to Final Feedback phase')
+            }
+            const invitation = result.feedbackInvitation || `Thank you for completing the technical assessment. We have reserved our final minute for candidate feedback. Please take a moment to rate your experience and share any feedback.`
+            if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
+              voiceEngineRef.current.speakAiQuestion({
+                text: invitation,
+                force: true,
+              })
+            }
+            setLiveAiSpeech(invitation)
           }).catch((err) => {
             hasRequestedWrapUpRef.current = false
             console.warn('Unable to start feedback wrap-up:', err.message)
@@ -826,6 +847,9 @@ export default function InterviewRoomPage() {
 
   // Guarantee audible filler nudge output using the unified CosyVoice audio pipeline
   const speakFillerNudgeAloud = (level = 1) => {
+    if (wrapUpStarted || remainingSeconds <= 60 || isCompleted) {
+      return ''
+    }
     let spokenText = ''
     if (voiceEngineRef.current && typeof voiceEngineRef.current.triggerSilenceNudge === 'function') {
       spokenText = voiceEngineRef.current.triggerSilenceNudge(level)
@@ -846,7 +870,12 @@ export default function InterviewRoomPage() {
         ? nudge1Phrases[Math.floor(Math.random() * nudge1Phrases.length)]
         : nudge2Phrases[Math.floor(Math.random() * nudge2Phrases.length)]
       if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
-        voiceEngineRef.current.speakAiQuestion(spokenText)
+        voiceEngineRef.current.speakAiQuestion({
+          text: spokenText,
+          sequence,
+          questionId: activeQuestionRef.current?.id || null,
+          isFiller: true,
+        })
       }
     }
 
@@ -963,7 +992,9 @@ export default function InterviewRoomPage() {
         isCompletedRef.current ||
         isTerminatedForViolationsRef.current ||
         isTerminatedForUnansweredRef.current ||
-        isLoading
+        isLoading ||
+        wrapUpStarted ||
+        remainingSeconds <= 60
       ) {
         silenceSecondsRef.current = 0
         setSilenceSeconds(0)
@@ -988,42 +1019,9 @@ export default function InterviewRoomPage() {
         }
       }
 
-      // 1. Unlimited answering time for Short Answer & Descriptive questions once candidate responds:
-      if (isVoiceQ && hasCandidateRespondedRef.current) {
-        const timeSinceLastSpeech = Date.now() - (lastSpeechActivityTimeRef.current || 0)
-
-        // Active Speech Pause Watchdog: After candidate speaks and pauses for 6.0s, auto-submit:
-        if (
-          !isCandidateTurnLockedRef.current &&
-          recordedSpeech.length >= 4 &&
-          lastSpeechActivityTimeRef.current > 0 &&
-          timeSinceLastSpeech >= 6000 &&
-          !isSubmittingRef.current &&
-          !isCompleted &&
-          voiceStateRef.current !== 'SPEAKING'
-        ) {
-          if (isRepeatQuestionRequest(recordedSpeech)) {
-            console.log('[InterviewRoom] Pause watchdog intercepted repeat query:', recordedSpeech)
-            handleRepeatCurrentQuestion()
-            return
-          }
-          console.log('[InterviewRoom] Pause watchdog triggered. Auto-submitting speech answer after 6.0s pause.')
-          if (autoSubmitTimerRef.current) {
-            clearTimeout(autoSubmitTimerRef.current)
-            autoSubmitTimerRef.current = null
-          }
-          if (handleSubmitAnswerRef.current) {
-            handleSubmitAnswerRef.current(recordedSpeech, 'VOICE')
-          }
-          return
-        }
-
-        // Candidate is actively responding on a voice question: NO time limit, NO filler nudges, NO skip!
-        silenceSecondsRef.current = 0
-        setSilenceSeconds(0)
-        return
-      }
-
+      // 1. Candidate speech and activity tracking:
+      // Candidate pauses while speaking Short Answer or Descriptive questions must NEVER trigger premature auto-submission.
+      // The candidate has freedom to formulate answers and use Submit Response when ready.
       // 2. Compute elapsed inactivity duration from last verified user activity timestamp:
       const idleMs = Date.now() - (lastUserActivityTimeRef.current || 0)
       const idleSeconds = Math.max(0, Math.floor(idleMs / 1000))
@@ -1056,12 +1054,22 @@ export default function InterviewRoomPage() {
         return
       }
 
-      // Step 3: Exactly stageDuration seconds of inactivity after Nudge 2 -> Skip/advance to next question!
+      // Step 3: Exactly stageDuration seconds of inactivity after Nudge 2 -> Authoritative inactivity fallback
       if (idleSeconds >= stageDuration && currentNudges === 2) {
-        console.log(`[InterviewRoom] ${stageDuration}s inactivity reached after Nudge 2 -> Skipping unanswered question`)
+        console.log(`[InterviewRoom] ${stageDuration}s inactivity reached after Nudge 2 -> Triggering inactivity fallback`)
         silenceSecondsRef.current = 0
         setSilenceSeconds(0)
-        handleSkipUnanswered()
+        const finalRecordedSpeech = (candidateSpeechBufferRef.current || '').trim()
+        const finalTyped = (typeof answerInputValueRef.current === 'string'
+          ? answerInputValueRef.current
+          : answerInputValueRef.current?.text || answerInputValueRef.current?.code || '').trim()
+        const pendingResponse = finalRecordedSpeech || finalTyped
+        if (isVoiceQ && pendingResponse.length >= 3 && handleSubmitAnswerRef.current) {
+          console.log('[InterviewRoom] Inactivity fallback auto-submitting accumulated response after complete timeout.')
+          handleSubmitAnswerRef.current(pendingResponse, 'VOICE')
+        } else {
+          handleSkipUnanswered()
+        }
         return
       }
     }, 1000)
@@ -1101,17 +1109,7 @@ export default function InterviewRoomPage() {
         setIsCompleted(true)
         const closingMsg = 'We have not received a response across three consecutive questions. This interview session has now concluded. Thank you for your time.'
         if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
-          voiceEngineRef.current.speakAiQuestion(closingMsg)
-        } else if (voiceEngineRef.current && typeof voiceEngineRef.current.speakDirectSpeech === 'function') {
-          voiceEngineRef.current.speakDirectSpeech(closingMsg)
-        } else if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-          try {
-            if (window.speechSynthesis.paused) window.speechSynthesis.resume()
-            window.speechSynthesis.cancel()
-            const u = new SpeechSynthesisUtterance(closingMsg)
-            u.volume = 1.0
-            window.speechSynthesis.speak(u)
-          } catch (_) {}
+          voiceEngineRef.current.speakAiQuestion({ text: closingMsg, sequence, force: true })
         }
         setLiveAiSpeech(closingMsg)
         try {
@@ -1135,17 +1133,7 @@ export default function InterviewRoomPage() {
         setIsCompleted(true)
         const closingMsg = result.closingMessage || 'We have not received a response after three questions, so we will conclude here. Thank you for your time.'
         if (voiceEngineRef.current && typeof voiceEngineRef.current.speakAiQuestion === 'function') {
-          voiceEngineRef.current.speakAiQuestion(closingMsg)
-        } else if (voiceEngineRef.current && typeof voiceEngineRef.current.speakDirectSpeech === 'function') {
-          voiceEngineRef.current.speakDirectSpeech(closingMsg)
-        } else if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-          try {
-            if (window.speechSynthesis.paused) window.speechSynthesis.resume()
-            window.speechSynthesis.cancel()
-            const u = new SpeechSynthesisUtterance(closingMsg)
-            u.volume = 1.0
-            window.speechSynthesis.speak(u)
-          } catch (_) {}
+          voiceEngineRef.current.speakAiQuestion({ text: closingMsg, sequence, force: true })
         }
         setLiveAiSpeech(closingMsg)
         return
@@ -1204,6 +1192,12 @@ export default function InterviewRoomPage() {
       }
     }
 
+    // Safely reconcile any finalizing recognized voice text buffer without waiting indefinitely
+    const finalizingSpeech = (candidateSpeechBufferRef.current || candidateInterimText || '').trim()
+    if (finalizingSpeech && finalizingSpeech.length > answerText.length && (finalizingSpeech.startsWith(answerText) || !answerText)) {
+      answerText = finalizingSpeech
+    }
+
     const currentSession = sessionRef.current || session
     const currentActiveQuestion = activeQuestionRef.current || activeQuestion
 
@@ -1220,16 +1214,20 @@ export default function InterviewRoomPage() {
       ? currentActiveQuestion.sequence
       : (lastProcessedSequenceRef.current >= 0 ? lastProcessedSequenceRef.current : 0)
 
-    // Double-submission protection: reject multiple submits for the exact same sequence
-    if (lastSubmittedSequenceRef.current === currentQSeq) {
+    // Double-submission protection: reject multiple submits for the exact same sequence or while submitting
+    if (lastSubmittedSequenceRef.current === currentQSeq || isSubmittingRef.current) {
       console.log(`[InterviewRoom] Double-submission guard: Question #${currentQSeq} already submitting.`)
       return
     }
     lastSubmittedSequenceRef.current = currentQSeq
+    isSubmittingRef.current = true
 
     // Reset inputs and patience tracking
     setAnswerInputValue('')
     candidateSpeechBufferRef.current = ''
+    currentInterimSpeechRef.current = ''
+    finalizedSegmentIdsRef.current.clear()
+    lastFinalizedSegmentRef.current = ''
     setCandidateInterimText('')
     lastScheduledTextRef.current = ''
     lastSpeechActivityTimeRef.current = 0
@@ -1246,6 +1244,9 @@ export default function InterviewRoomPage() {
     setManualMicOverride(false)
     setIsSubmitting(true)
     setVoiceState('THINKING')
+    if (voiceEngineRef.current?.cancelCurrentAudio) {
+      voiceEngineRef.current.cancelCurrentAudio('Candidate submitted answer')
+    }
     setError('')
 
     // 1. Add candidate message bubble to dialogue stream immediately
@@ -1259,17 +1260,25 @@ export default function InterviewRoomPage() {
     setTranscripts((prev) => [...prev, optimisticTurn])
 
     try {
+      const structuredAnswer = typeof payloadOrText === 'object' && payloadOrText !== null ? payloadOrText : null
       const result = await interviewService.submitAnswer(
         currentSession.id,
         token,
         answerText,
         currentQSeq,
         currentActiveQuestion?.id,
-        inputMode
+        inputMode,
+        structuredAnswer
       )
 
       if (result.session) {
-        setSession(result.session)
+        setSession((prev) => ({
+          ...prev,
+          ...result.session,
+          job: result.session?.job || prev?.job,
+          candidate: result.session?.candidate || prev?.candidate,
+          organization: result.session?.organization || prev?.organization,
+        }))
       }
       if (result.coverageMatrix) {
         setCoverageMatrix(result.coverageMatrix)
@@ -1286,7 +1295,7 @@ export default function InterviewRoomPage() {
         const wrapUpMsg = result.closingMessage ||
           `Thank you, ${candidate?.full_name || 'Candidate'}. That concludes your technical interview for the ${job?.title || 'role'}. Your responses have been recorded and will now be evaluated.`
         if (voiceEngineRef.current) {
-          voiceEngineRef.current.speakAiQuestion(wrapUpMsg)
+          voiceEngineRef.current.speakAiQuestion({ text: wrapUpMsg, sequence, force: true })
         }
         return
       }
@@ -1305,6 +1314,7 @@ export default function InterviewRoomPage() {
       lastSubmittedSequenceRef.current = -1 // Allow retry on failure
       setTranscripts((prev) => prev.filter((turn) => turn.id !== optimisticTurnId))
       setAnswerInputValue(answerText)
+      candidateSpeechBufferRef.current = answerText
       if (inputMode === 'VOICE') setCandidateInterimText(answerText)
       const normalized = normalizeApiError(err, 'We could not submit that response just now. Your answer has been preserved. Please try submitting again.')
       setError(normalized.message)
@@ -1321,13 +1331,19 @@ export default function InterviewRoomPage() {
       clearTimeout(autoSubmitTimerRef.current)
       autoSubmitTimerRef.current = null
     }
-    voiceCaptureCancelledRef.current = true
     candidateSpeechBufferRef.current = ''
+    currentInterimSpeechRef.current = ''
+    finalizedSegmentIdsRef.current.clear()
+    lastFinalizedSegmentRef.current = ''
     setCandidateInterimText('')
+    setAnswerInputValue('')
     lastScheduledTextRef.current = ''
     lastSpeechActivityTimeRef.current = 0
-    if (voiceEngineRef.current) voiceEngineRef.current.setMute(true)
-    setIsMuted(true)
+    hasCandidateRespondedRef.current = false
+    setHasCandidateResponded(false)
+    if (voiceEngineRef.current) {
+      voiceEngineRef.current.resetCandidateSpeechRecognition()
+    }
   }
 
   // Handle explicit or spoken request to repeat active question aloud
@@ -1344,7 +1360,11 @@ export default function InterviewRoomPage() {
       autoSubmitTimerRef.current = null
     }
     candidateSpeechBufferRef.current = ''
+    currentInterimSpeechRef.current = ''
+    finalizedSegmentIdsRef.current.clear()
+    lastFinalizedSegmentRef.current = ''
     setCandidateInterimText('')
+    setAnswerInputValue('')
     lastScheduledTextRef.current = ''
     lastSpeechActivityTimeRef.current = 0
 
@@ -1433,7 +1453,7 @@ export default function InterviewRoomPage() {
             handleIncomingAiQuestion(event)
           },
           onInterviewCompleted: () => setIsCompleted(true),
-          onCandidateSpeech: ({ text, isInterim, isFinal }) => {
+          onCandidateSpeech: ({ text, isInterim, isFinal, segmentId }) => {
             // STRICT TURN LOCK: Reject candidate speech while AI is speaking or session submitting/completed
             if (
               voiceCaptureCancelledRef.current ||
@@ -1446,32 +1466,20 @@ export default function InterviewRoomPage() {
             }
 
             const raw = (text || '').trim()
-            if (!raw) return
-
-            let activeFullText = ''
-            if (isFinal) {
-              candidateSpeechBufferRef.current = candidateSpeechBufferRef.current
-                ? `${candidateSpeechBufferRef.current} ${raw}`
-                : raw
-              activeFullText = candidateSpeechBufferRef.current
-            } else {
-              activeFullText = candidateSpeechBufferRef.current
-                ? `${candidateSpeechBufferRef.current} ${raw}`
-                : raw
-            }
-
-            activeFullText = activeFullText.trim()
-            if (!activeFullText) return
 
             // 0. Candidate repetition request:
-            if (isRepeatQuestionRequest(activeFullText)) {
-              console.log(`[InterviewRoom] Candidate asked to repeat question: "${activeFullText}". Triggering repeat flow.`)
+            if (raw && isRepeatQuestionRequest(raw)) {
+              console.log(`[InterviewRoom] Candidate asked to repeat question: "${raw}". Triggering repeat flow.`)
               if (autoSubmitTimerRef.current) {
                 clearTimeout(autoSubmitTimerRef.current)
                 autoSubmitTimerRef.current = null
               }
               candidateSpeechBufferRef.current = ''
+              currentInterimSpeechRef.current = ''
+              finalizedSegmentIdsRef.current.clear()
+              lastFinalizedSegmentRef.current = ''
               setCandidateInterimText('')
+              setAnswerInputValue('')
               lastScheduledTextRef.current = ''
               lastSpeechActivityTimeRef.current = 0
 
@@ -1479,8 +1487,54 @@ export default function InterviewRoomPage() {
               return
             }
 
-            // 1. Single voice recording box: immediately reflect speech in candidate voice response box
-            setCandidateInterimText(activeFullText)
+            if (isFinal) {
+              if (!raw) return
+
+              // Event-level deduplication: ignore if segmentId was already processed
+              if (segmentId && finalizedSegmentIdsRef.current.has(segmentId)) {
+                return
+              }
+              if (segmentId) {
+                finalizedSegmentIdsRef.current.add(segmentId)
+              }
+
+              // Do not duplicate if this exact final text was just processed
+              if (lastFinalizedSegmentRef.current && lastFinalizedSegmentRef.current === raw) {
+                return
+              }
+              lastFinalizedSegmentRef.current = raw
+
+              // Reset ephemeral interim text
+              currentInterimSpeechRef.current = ''
+
+              // Append new finalized segment to authoritative buffer
+              const base = candidateSpeechBufferRef.current || ''
+              const newAccumulated = appendSpeechSegment(base, raw)
+              candidateSpeechBufferRef.current = newAccumulated
+
+              // Update the visible live transcript panel
+              setCandidateInterimText(newAccumulated)
+
+              // Synchronize the editable answer input field
+              const updatedAnswerValue =
+                typeof answerInputValueRef.current === 'object' && answerInputValueRef.current !== null
+                  ? { ...answerInputValueRef.current, text: newAccumulated, inputMethod: 'voice_text' }
+                  : newAccumulated
+              setAnswerInputValue(updatedAnswerValue)
+            } else if (isInterim) {
+              currentInterimSpeechRef.current = raw
+
+              // Ephemeral interim preview:
+              // Display base accumulated text + current in-progress words in the blue panel
+              const base = candidateSpeechBufferRef.current || ''
+              const liveDisplay = base
+                ? (raw ? `${base} ${raw}` : base)
+                : raw
+
+              setCandidateInterimText(liveDisplay)
+              // NOTE: Unconfirmed interim words are NOT committed into answerInputValue or candidateSpeechBufferRef!
+            }
+
             lastSpeechActivityTimeRef.current = Date.now()
             lastUserActivityTimeRef.current = Date.now()
             silenceSecondsRef.current = 0
@@ -1495,40 +1549,20 @@ export default function InterviewRoomPage() {
               }
             }
 
-            // 2. High-responsiveness silence detection & auto-submit:
-            // STRICT REQUIREMENT: Only auto-submit voice answers for DESCRIPTIVE, SHORT_ANSWER, or BEHAVIORAL questions!
-            // Multiple-choice, code, SQL, output, and boolean questions MUST NOT auto-submit on background sounds!
-            const currentQ = activeQuestionRef.current
-            const isVoiceQuestion = isLongFormVoiceQuestion(currentQ)
-            if (!isVoiceQuestion) {
-              return
-            }
-
-            const prevText = lastScheduledTextRef.current || ''
-            const hasGrown = activeFullText.length > prevText.length + 3
-
-            if (activeFullText.length >= 4) {
-              lastScheduledTextRef.current = activeFullText
-
-              // If text has grown, or if no timer is ticking, schedule auto-submit!
-              // 6.0 second pause gap (user requirement: 5-7s)
-              if (hasGrown || !autoSubmitTimerRef.current) {
-                if (autoSubmitTimerRef.current) {
-                  clearTimeout(autoSubmitTimerRef.current)
-                }
-                const finalizationDelay = 6000 // 6.0 seconds pause buffer
-                autoSubmitTimerRef.current = setTimeout(() => {
-                  console.log(`[InterviewRoom] Candidate speech settled (6.0s pause). Submitting answer for active question.`)
-                  if (handleSubmitAnswerRef.current) {
-                    handleSubmitAnswerRef.current(activeFullText, 'VOICE')
-                  }
-                }, finalizationDelay)
-              }
-            }
+            // Candidate speaks freely without racing a short silence timer.
+            // Short pauses to think or segment endings must NEVER auto-submit their partial response.
+            // Manual "Submit Response" is the primary submission mechanism.
+            lastScheduledTextRef.current = candidateSpeechBufferRef.current
           },
-          onTranscript: ({ text, isNudge, isTermination, isFinal, isDelta, speaker }) => {
+          onTranscript: ({ text, isNudge, isTermination, isFinal, isDelta, speaker, sequence: transcriptSeq }) => {
             if (speaker === 'AI') {
               if (isThoughtOrMetaPlanning(text)) return
+
+              // MONOTONIC SEQUENCE GUARD: Reject late transcript events from previous questions
+              if (typeof transcriptSeq === 'number' && transcriptSeq < lastProcessedSequenceRef.current) {
+                console.log(`[InterviewRoom] Monotonic Guard: Ignoring stale transcript with sequence ${transcriptSeq} < current ${lastProcessedSequenceRef.current}`)
+                return
+              }
 
               const cleanText = text
                 .replace(/^#+\s+/gm, '')
@@ -1647,6 +1681,9 @@ export default function InterviewRoomPage() {
     // If AI is currently speaking, toggling mute halts AI speech and immediately unlocks candidate mic and turn!
     if (voiceStateRef.current === 'SPEAKING' || isCandidateTurnLockedRef.current) {
       console.log('[InterviewRoom] Candidate clicked unmute during AI speech. Halting speech and passing mic immediately.')
+      if (voiceEngineRef.current?.cancelCurrentAudio) {
+        voiceEngineRef.current.cancelCurrentAudio('Candidate clicked unmute during AI speech')
+      }
       concludeSpeakingAndPassMic()
       return
     }
@@ -1754,6 +1791,11 @@ export default function InterviewRoomPage() {
     }
   }, [activeQuestionState])
 
+  // Desktop/PC hardware gate (Requirement 10)
+  if (!deviceCheck.isDesktop) {
+    return <DesktopRequiredScreen detectedType={deviceCheck.detectedType} />
+  }
+
   // Loading Screen
   if (isLoading) {
     return (
@@ -1795,7 +1837,13 @@ export default function InterviewRoomPage() {
 
   const { job, candidate, organization } = session || {}
   const coveredCount = Array.isArray(coverageMatrix)
-    ? coverageMatrix.filter((c) => c.status === 'SUFFICIENTLY_EVALUATED' || c.status === 'MASTERY_PROVEN').length
+    ? coverageMatrix.filter((c) =>
+        c.status === 'SUFFICIENTLY_EVALUATED' ||
+        c.status === 'MASTERY_PROVEN' ||
+        c.status === 'ASSESSED' ||
+        c.assessed === true ||
+        (Number(c.attempts) >= 1 && (Number(c.average_score) > 0 || (Array.isArray(c.scores) && c.scores.length > 0)))
+      ).length
     : 0
   const totalCriteriaCount = Array.isArray(coverageMatrix) ? coverageMatrix.length : 0
 
@@ -2025,7 +2073,7 @@ export default function InterviewRoomPage() {
         ) : (
           /* Active Dual-Region Live Meeting Room */
           <>
-            {/* Left Region: AI Interviewer Presence & Animated Orb */}
+            {/* Left Region: AI Interviewer Presence & Animated Orb with Dialogue Box directly beneath */}
             <div className="lg:col-span-5 h-full overflow-hidden">
               <AIInterviewerPanel
                 conversationState={
@@ -2048,78 +2096,163 @@ export default function InterviewRoomPage() {
                 onOpenConversation={() => setIsConversationDrawerOpen(true)}
                 unreadTurnsCount={transcripts.length}
                 silenceNudgeText={silenceNudgeText}
+                liveAiSpeech={liveAiSpeech}
+                isAiSpeaking={voiceState === 'SPEAKING'}
               />
             </div>
 
-            {/* Right Region: Active Question Panel & Dynamic Interaction Area */}
-            <div className="lg:col-span-7 h-full flex flex-col justify-between overflow-hidden gap-3.5">
+            {/* Right Region: Active Question Panel & Dynamic Interaction Area OR Dedicated Final Feedback Phase */}
+            <div className="lg:col-span-7 h-full flex flex-col justify-between overflow-hidden gap-3.5 min-w-0">
               {error && (
                 <div role="alert" className="shrink-0 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800">
                   {error}
                 </div>
               )}
-              {/* Pinned Top Question Banner / Dialogue Box with SMS Thread */}
-              <ActiveQuestionPanel
-                question={activeQuestion}
-                sequence={sequence}
-                roomStartupCountdown={roomStartupCountdown}
-                criterionName={activeQuestion?.metadata?.rubric_focus || null}
-                liveAiSpeech={liveAiSpeech}
-                isAiSpeaking={voiceState === 'SPEAKING'}
-                transcripts={transcripts}
-                candidateName={candidate?.full_name || 'You'}
-                onRepeatQuestion={handleRepeatCurrentQuestion}
-              />
 
-              {/* Dynamic Interaction Area */}
-              <div className="flex-1 min-h-0 bg-white/70 backdrop-blur-xs rounded-3xl border border-slate-200/90 p-4 sm:p-5 flex flex-col justify-between overflow-y-auto shadow-2xs">
-                {wrapUpStarted && (
-                  <section className="mb-3 p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-950 shrink-0">
-                    <div className="flex items-center justify-between gap-3">
+              {wrapUpStarted || (remainingSeconds <= 60 && !isLoading && Boolean(session?.id)) || session?.session_metadata?.interview_phase === 'FEEDBACK' ? (
+                <div className="flex-1 min-h-0 bg-white/90 backdrop-blur-md rounded-3xl border border-indigo-200/90 p-5 sm:p-7 flex flex-col justify-between overflow-y-auto shadow-sm">
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between pb-3 border-b border-indigo-100">
                       <div>
-                        <h3 className="text-xs font-bold">Final interview feedback</h3>
-                        <p className="text-[11px] text-indigo-800 mt-0.5">Share feedback and rate your experience. Current AI rubric ratings are shown below.</p>
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-indigo-600 font-bold bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
+                          Final Phase • Candidate Feedback
+                        </span>
+                        <h2 className="text-base sm:text-lg font-sans font-bold text-slate-900 mt-1">
+                          Technical Assessment Complete
+                        </h2>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          The final 60 seconds are reserved exclusively for candidate feedback. Please rate your experience and share any feedback.
+                        </p>
                       </div>
-                      <span className="text-xs font-bold tabular-nums">{Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, '0')}</span>
+                      <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl text-indigo-900 font-mono text-xs font-bold tabular-nums">
+                        <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>{Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, '0')}</span>
+                      </div>
                     </div>
+
+                    {/* Assessed Rubric Pillars Summary */}
                     {coverageMatrix.length > 0 && (
-                      <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1">
-                        {coverageMatrix.map((criterion) => (
-                          <div key={criterion.criterion_id || criterion.name} className="flex justify-between gap-2 text-[10px] text-indigo-900">
-                            <span className="truncate">{criterion.name}</span>
-                            <span className="font-bold shrink-0">{criterion.attempts ? `${criterion.average_score}/10` : 'Not assessed'}</span>
-                          </div>
-                        ))}
+                      <div className="p-3.5 rounded-2xl bg-slate-50/80 border border-slate-200 space-y-2">
+                        <div className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider">
+                          Assessed Rubric Pillars
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                          {coverageMatrix.map((criterion) => (
+                            <div key={criterion.criterion_id || criterion.name} className="flex items-center justify-between p-2 rounded-xl bg-white border border-slate-200/80">
+                              <span className="font-medium text-slate-700 truncate">{criterion.name}</span>
+                              <span className={`text-[11px] font-bold ${criterion.attempts ? 'text-blue-600' : 'text-slate-400'}`}>
+                                {criterion.attempts ? `${criterion.average_score}/10` : 'Not Assessed'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
-                    <div className="mt-2 pt-2 border-t border-indigo-200/80">
-                      <div className="flex items-center gap-1.5 text-[10px] font-semibold text-indigo-900">
-                        Rate the AI interviewer
+
+                    {/* AI Interviewer Rating */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-800 block">
+                        Rate the AI Interviewer Experience
+                      </label>
+                      <div className="flex items-center gap-2">
                         {[1, 2, 3, 4, 5].map((rating) => (
                           <button
                             key={rating}
                             type="button"
-                            aria-label={`Rate AI interviewer ${rating} out of 5`}
+                            aria-label={`Rate ${rating} stars out of 5`}
                             aria-pressed={candidateAiRating === rating}
                             onClick={() => { setCandidateAiRating(rating); candidateAiRatingRef.current = rating }}
-                            className={`ml-0.5 w-6 h-6 rounded-full text-[10px] font-bold ${candidateAiRating === rating ? 'bg-indigo-700 text-white' : 'bg-white border border-indigo-200 text-indigo-800 hover:bg-indigo-100'}`}
-                          >{rating}</button>
+                            className={`w-10 h-10 rounded-2xl text-xs font-bold font-mono transition-all flex items-center justify-center cursor-pointer ${
+                              candidateAiRating === rating
+                                ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400 scale-105'
+                                : 'bg-white border border-slate-200 hover:border-indigo-300 text-slate-700 hover:bg-indigo-50/50'
+                            }`}
+                          >
+                            {rating}★
+                          </button>
                         ))}
+                        <span className="text-xs text-slate-500 ml-2">
+                          {candidateAiRating === 5 ? 'Exceptional' : candidateAiRating === 4 ? 'Very Good' : candidateAiRating === 3 ? 'Good' : candidateAiRating ? 'Needs Improvement' : 'Select a rating'}
+                        </span>
                       </div>
+                    </div>
+
+                    {/* Feedback text area */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-800 block">
+                        Candidate Comments & Reflections (Optional)
+                      </label>
                       <textarea
                         value={candidateFeedback}
                         onChange={(event) => { setCandidateFeedback(event.target.value); candidateFeedbackRef.current = event.target.value }}
                         maxLength={4000}
-                        rows={2}
-                        placeholder="Your interview feedback (optional)"
-                        className="mt-2 w-full resize-y rounded-xl border border-indigo-200 bg-white px-3 py-2 text-[11px] text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        rows={4}
+                        placeholder="Share your thoughts on the technical pacing, clarity of questions, or the interview room..."
+                        className="w-full resize-none rounded-2xl border border-slate-200 bg-white p-3.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400/20 focus:border-indigo-500 leading-relaxed font-sans"
                       />
                     </div>
-                  </section>
-                )}
+                  </div>
+
+                  {/* Submit button */}
+                  <div className="pt-4 border-t border-slate-100 flex items-center justify-between mt-3">
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      Session concludes at 0:00 or upon clicking submit
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isSubmittingFeedback || isCompleted}
+                      onClick={async () => {
+                        if (isSubmittingFeedback) return
+                        setIsSubmittingFeedback(true)
+                        try {
+                          await interviewService.completeInterview(
+                            session?.interview_id || session?.id,
+                            token,
+                            candidateFeedbackRef.current,
+                            candidateAiRatingRef.current
+                          )
+                        } catch (err) {
+                          console.warn('Feedback submit error:', err.message)
+                        } finally {
+                          setIsCompleted(true)
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 text-white disabled:text-slate-400 font-semibold text-xs shadow-sm transition cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      {isSubmittingFeedback ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Submitting & Finalizing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Submit Feedback & Conclude</span>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Pinned Top Question Banner / Dialogue Box with SMS Thread */}
+                  <ActiveQuestionPanel
+                    question={activeQuestion}
+                    sequence={sequence}
+                    roomStartupCountdown={roomStartupCountdown}
+                    criterionName={activeQuestion?.metadata?.rubric_focus || null}
+                    liveAiSpeech={liveAiSpeech}
+                    isAiSpeaking={voiceState === 'SPEAKING'}
+                    transcripts={transcripts}
+                    candidateName={candidate?.full_name || 'You'}
+                    onRepeatQuestion={handleRepeatCurrentQuestion}
+                  />
+
+                  {/* Dynamic Interaction Area */}
+                  <div className="flex-1 min-h-0 bg-white/70 backdrop-blur-xs rounded-3xl border border-slate-200/90 p-4 sm:p-5 flex flex-col justify-between overflow-y-auto shadow-2xs min-w-0 w-full">
 
                 {/* 1. Transcriber Box & Submit Bar (Moved UPWARD, between Dialogue Box and Text Box) */}
-                <div className="mb-3.5 shrink-0">
+                <div className="mb-3.5 shrink-0 w-full min-w-0">
                   {voiceState === 'SPEAKING' || roomStartupCountdown > 0 ? (
                     <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-50 border border-slate-200 text-slate-700 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
                       <div className="flex items-center gap-2.5 overflow-hidden flex-1">
@@ -2160,42 +2293,45 @@ export default function InterviewRoomPage() {
                       </div>
                     </div>
                   ) : candidateInterimText ? (
-                    <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-blue-50/95 via-indigo-50/90 to-sky-50/90 border border-blue-200/90 text-blue-950 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs animate-fade-in">
-                      <div className="flex items-start gap-2.5 overflow-hidden flex-1">
+                    <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-blue-50/95 via-indigo-50/90 to-sky-50/90 border border-blue-200/90 text-blue-950 text-xs flex flex-col gap-3.5 shadow-2xs animate-fade-in w-full min-w-0">
+                      {/* Region A: Full-width live transcript content area */}
+                      <div className="flex items-start gap-3 w-full min-w-0">
                         <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
                           <Mic className="w-4 h-4 animate-pulse" />
                         </div>
-                        <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex-1 min-w-0 space-y-1.5">
                           <div className="flex items-center gap-1.5 font-sans font-bold text-[11px] text-blue-700 uppercase tracking-normal">
                             <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping shrink-0" />
                             <span>Live Transcribed Voice Response</span>
                           </div>
-                          <p className="italic text-slate-800 font-sans text-xs sm:text-[13px] leading-relaxed break-words font-medium">
+                          <p className="italic text-slate-800 font-sans text-sm sm:text-[15px] leading-relaxed font-medium break-words [overflow-wrap:anywhere] w-full">
                             &ldquo;{candidateInterimText}&rdquo;
                           </p>
                         </div>
                       </div>
-                      <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2.5 shrink-0">
-                        <span className="text-[10px] text-blue-700 font-sans hidden sm:inline font-medium bg-blue-100/80 px-2.5 py-1 rounded-lg border border-blue-200">
-                          Auto-submits in 6s on pause
+
+                      {/* Region B: Action controls area beneath the transcript */}
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-3 border-t border-blue-200/70 w-full min-w-0">
+                        <span className="text-[11px] text-blue-700 font-sans font-medium bg-blue-100/80 px-2.5 py-1 rounded-lg border border-blue-200 self-start sm:self-auto">
+                          Speak naturally • Submit when ready
                         </span>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center justify-end gap-2 shrink-0">
                           <button
                             type="button"
                             onClick={handleCancelVoiceSubmission}
                             disabled={isSubmitting}
-                            className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-sans font-semibold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                            title="Cancel this voice response and edit or re-enter it"
+                            className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-sans font-semibold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            title="Clear this voice response and re-record or edit"
                           >
                             <X className="w-3.5 h-3.5" />
-                            <span>Cancel</span>
+                            <span>Clear Response</span>
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleSubmitAnswer(candidateInterimText, 'VOICE')}
+                            onClick={() => handleSubmitAnswer(candidateInterimText || (typeof answerInputValue === 'object' ? answerInputValue?.text : answerInputValue), 'VOICE')}
                             disabled={isSubmitting}
                             className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-sans font-semibold text-xs transition shadow-md shadow-blue-500/20 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
-                            title="Submit response immediately without waiting for silence timer"
+                            title="Submit response"
                           >
                             {isSubmitting ? (
                               <>
@@ -2337,19 +2473,26 @@ export default function InterviewRoomPage() {
                     candidateSpeech={candidateInterimText}
                     onChange={(val) => {
                       setAnswerInputValue(val)
-                      lastTypingActivityTimeRef.current = Date.now()
-                      lastUserActivityTimeRef.current = Date.now()
-                      silenceSecondsRef.current = 0
-                      setSilenceSeconds(0)
-                      if (nudgeCountRef.current > 0) {
-                        nudgeCountRef.current = 0
-                        setNudgeCount(0)
-                      }
-                      const valStr = typeof val === 'string' ? val : val?.text || val?.code || ''
-                      if (valStr.trim().length >= 3 && isLongFormVoiceQuestion(activeQuestionRef.current)) {
-                        if (!hasCandidateRespondedRef.current) {
-                          hasCandidateRespondedRef.current = true
-                          setHasCandidateResponded(true)
+                      const isVoiceSync = typeof val === 'object' && val?.inputMethod === 'voice_text'
+                      if (!isVoiceSync) {
+                        lastTypingActivityTimeRef.current = Date.now()
+                        lastUserActivityTimeRef.current = Date.now()
+                        silenceSecondsRef.current = 0
+                        setSilenceSeconds(0)
+                        if (nudgeCountRef.current > 0) {
+                          nudgeCountRef.current = 0
+                          setNudgeCount(0)
+                        }
+                        const valStr = typeof val === 'string' ? val : val?.text || val?.code || ''
+                        // Synchronize candidateSpeechBufferRef and candidateInterimText with manual keyboard edits
+                        candidateSpeechBufferRef.current = valStr
+                        setCandidateInterimText(valStr)
+
+                        if (valStr.trim().length >= 3 && isLongFormVoiceQuestion(activeQuestionRef.current)) {
+                          if (!hasCandidateRespondedRef.current) {
+                            hasCandidateRespondedRef.current = true
+                            setHasCandidateResponded(true)
+                          }
                         }
                       }
                     }}
@@ -2359,7 +2502,9 @@ export default function InterviewRoomPage() {
                   />
                 </div>
               </div>
-            </div>
+            </>
+          )}
+        </div>
 
             {/* Secondary Conversation History Drawer / Modal */}
             <ConversationStream

@@ -77,6 +77,14 @@ CREATE TABLE IF NOT EXISTS public.jobs (
   department VARCHAR(100),
   seniority VARCHAR(50) DEFAULT 'MID' CHECK (seniority IN ('JUNIOR', 'MID', 'SENIOR', 'STAFF', 'LEAD')),
   status VARCHAR(50) NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'ACTIVE', 'PAUSED', 'CLOSED')),
+  background_type VARCHAR(50) NOT NULL DEFAULT 'TECHNICAL' CHECK (background_type IN ('TECHNICAL', 'NON_TECHNICAL', 'BUSINESS_DEVELOPMENT', 'MARKETING', 'CUSTOM')),
+  custom_background VARCHAR(100),
+  allowed_question_types JSONB NOT NULL DEFAULT '["SHORT_ANSWER", "DESCRIPTIVE", "MULTIPLE_CHOICE", "SCENARIO"]'::jsonb,
+  custom_question_types JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ask_about_projects BOOLEAN NOT NULL DEFAULT TRUE,
+  opening_question TEXT,
+  target_difficulty VARCHAR(50) NOT NULL DEFAULT 'MEDIUM' CHECK (target_difficulty IN ('EASY', 'MEDIUM', 'HARD')),
+  deleted_at TIMESTAMPTZ,
   created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -161,6 +169,7 @@ CREATE TABLE IF NOT EXISTS public.candidates (
   onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE,
   onboarding_data JSONB NOT NULL DEFAULT '{}'::jsonb,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_org_candidate_email UNIQUE (organization_id, email)

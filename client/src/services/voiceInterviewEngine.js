@@ -79,6 +79,13 @@ export class VoiceInterviewEngine {
     this.isPlaying = false
     this.audioState = 'IDLE'
     this.activeAudioTurnId = null
+    this.activePlaybackSequence = null
+    this.activePlaybackQuestionId = null
+    this.currentQuestionSequence = null
+    this.currentQuestionId = null
+    this.currentTurnGeneration = 0
+    this.cancelledTurns = new Set()
+    this.completedTurns = new Set()
     this.audioPlaybackFailed = false
     this.isAiTurnActive = false // Strictly true while Gemini Live audio turn is being generated/streamed
     this.turnCompletionTimer = null
@@ -112,6 +119,7 @@ export class VoiceInterviewEngine {
         }
       },
       onPlaybackComplete: (report) => {
+        this.completedTurns.add(report.turnId)
         if (this.ws?.readyState === WebSocket.OPEN) {
           this._sendGatewayMessage({ type: 'ai_audio_playback_complete', audioTurnId: report.turnId, stats: report.stats })
         }
@@ -179,40 +187,80 @@ export class VoiceInterviewEngine {
     }
   }
 
-  async _synthesizeSpokenText(text) {
+  async _synthesizeSpokenText({ text, turnId, generation, sequence, questionId }) {
     if (!text || this.isStopped) return
+    if (this.cancelledTurns.has(turnId)) return
+
     const controller = new AbortController()
     this.ttsAbortController = controller
-    const audioTurnId = `cosy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+
     let resolvePlayback
     const playbackFinished = new Promise((resolve) => { resolvePlayback = resolve })
-    this.playbackWaiters.set(audioTurnId, resolvePlayback)
-    this._handleServerMessage({ data: JSON.stringify({ type: 'ai_audio_started', audioTurnId, spokenPrompt: text }) })
+    this.playbackWaiters.set(turnId, resolvePlayback)
+
+    this._handleServerMessage({
+      data: JSON.stringify({
+        type: 'ai_audio_started',
+        audioTurnId: turnId,
+        questionId,
+        questionSequence: sequence,
+        spokenPrompt: text,
+      }),
+    })
+
     let buffer = ''
     let receivedChunks = 0
     let playbackTimeout = null
+
     const consumeLine = (line) => {
       if (!line.trim()) return
+      if (this.currentTurnGeneration !== generation || this.cancelledTurns.has(turnId) || this.isStopped) return
+
       const event = JSON.parse(line)
       if (event.type === 'audio_chunk') {
+        if (event.audioTurnId && event.audioTurnId !== this.activeAudioTurnId) return
+        if (typeof event.sequence === 'number' && this.currentQuestionSequence != null && event.sequence < this.currentQuestionSequence) return
         receivedChunks++
-        this._handleServerMessage({ data: JSON.stringify({
-          type: 'ai_audio_chunk', audioTurnId,
-          data: event.data, mimeType: event.mimeType, sampleRate: event.sampleRate,
-          channels: event.channels, bitDepth: event.bitDepth, byteOrder: event.byteOrder,
-          audioSequence: event.chunkIndex, chunkIndex: event.chunkIndex,
-        }) })
+        this._handleServerMessage({
+          data: JSON.stringify({
+            type: 'ai_audio_chunk',
+            audioTurnId: turnId,
+            questionId,
+            questionSequence: sequence,
+            data: event.data,
+            mimeType: event.mimeType || 'audio/pcm;rate=24000',
+            sampleRate: event.sampleRate || 24000,
+            channels: event.channels || 1,
+            bitDepth: event.bitDepth || 16,
+            byteOrder: event.byteOrder || 'little-endian',
+            audioSequence: event.chunkIndex || receivedChunks,
+            chunkIndex: event.chunkIndex || receivedChunks,
+          }),
+        })
       } else if (event.type === 'complete') {
-        if (!receivedChunks) throw new Error('CosyVoice returned no playable audio.')
-        this._handleServerMessage({ data: JSON.stringify({
-          type: 'ai_transcript_complete', audioTurnId, fullTranscript: event.text || text,
-        }) })
-        this._handleServerMessage({ data: JSON.stringify({
-          type: 'ai_audio_stream_complete', audioTurnId, fullTranscript: event.text || text,
-          providerUsed: event.provider,
-        }) })
+        if (event.audioTurnId && event.audioTurnId !== this.activeAudioTurnId) return
+        if (!receivedChunks) throw new Error('Voice synthesis returned no playable audio.')
+        this._handleServerMessage({
+          data: JSON.stringify({
+            type: 'ai_transcript_complete',
+            audioTurnId: turnId,
+            questionId,
+            questionSequence: sequence,
+            fullTranscript: event.text || text,
+          }),
+        })
+        this._handleServerMessage({
+          data: JSON.stringify({
+            type: 'ai_audio_stream_complete',
+            audioTurnId: turnId,
+            questionId,
+            questionSequence: sequence,
+            fullTranscript: event.text || text,
+            providerUsed: event.provider,
+          }),
+        })
       } else if (event.type === 'error') {
-        throw new Error(event.error || 'CosyVoice could not speak this prompt.')
+        throw new Error(event.error || 'Voice synthesis failed for this prompt.')
       }
     }
 
@@ -220,9 +268,16 @@ export class VoiceInterviewEngine {
       const response = await fetch(`${API_BASE_URL}/voice/synthesize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-        body: JSON.stringify({ token: this.token, text }),
+        body: JSON.stringify({
+          token: this.token,
+          text,
+          turnId,
+          questionId,
+          sequence,
+        }),
         signal: controller.signal,
       })
+
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
         throw new Error(body.error || `Voice synthesis request failed (${response.status}).`)
@@ -232,6 +287,10 @@ export class VoiceInterviewEngine {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       while (true) {
+        if (this.currentTurnGeneration !== generation || this.cancelledTurns.has(turnId) || this.isStopped) {
+          try { reader.cancel() } catch (_) {}
+          break
+        }
         const { done, value } = await reader.read()
         buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
         const lines = buffer.split('\n')
@@ -240,48 +299,35 @@ export class VoiceInterviewEngine {
         if (done) break
       }
       if (buffer.trim()) consumeLine(buffer)
-      if (!receivedChunks) throw new Error('CosyVoice returned no playable audio.')
+
+      if (this.currentTurnGeneration !== generation || this.cancelledTurns.has(turnId) || this.isStopped) {
+        return
+      }
+
+      if (!receivedChunks) throw new Error('Voice synthesis returned no playable audio.')
+
+      // Wait for actual physical playback completion on AudioPlaybackEngine
       await Promise.race([
         playbackFinished,
         new Promise((resolve) => {
           playbackTimeout = setTimeout(() => {
-            console.warn('[VoiceEngine] Audio playback did not complete in time; advancing the interview turn.')
+            console.warn('[VoiceEngine] Audio playback watchdog reached; advancing turn.')
             this._concludeAiSpeakingTurn()
             resolve()
           }, 90000)
         }),
       ])
     } catch (error) {
-      if (error.name === 'AbortError' || this.isStopped) return
-      console.warn('[VoiceEngine] Server voice synthesis unavailable, falling back to client speech synthesis:', error.message)
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window && !this.isStopped) {
-        try {
-          if (window.speechSynthesis.paused) {
-            window.speechSynthesis.resume()
-          }
-          window.speechSynthesis.cancel()
-          const utterance = new SpeechSynthesisUtterance(text)
-          utterance.lang = this.language || 'en-US'
-          const voice = this._getPreferredSpeechVoice()
-          if (voice) utterance.voice = voice
-          utterance.rate = 1.0
-          this._updateState('SPEAKING')
-          await new Promise((resolve) => {
-            utterance.onend = resolve
-            utterance.onerror = resolve
-            window.speechSynthesis.speak(utterance)
-            setTimeout(resolve, 6000)
-          })
-          this._concludeAiSpeakingTurn()
-          return
-        } catch (_) {}
+      if (error.name === 'AbortError' || this.currentTurnGeneration !== generation || this.cancelledTurns.has(turnId) || this.isStopped) {
+        return
       }
+      console.warn('[VoiceEngine] Server voice synthesis unavailable:', error.message)
       this.onError(error.message || 'Interviewer voice could not be played.')
-      this._handleAiTurnComplete({ audioTurnId, audioUnavailable: true })
+      this._handleAiTurnComplete({ audioTurnId: turnId, audioUnavailable: true })
     } finally {
       if (playbackTimeout) clearTimeout(playbackTimeout)
       if (this.ttsAbortController === controller) this.ttsAbortController = null
-      this._resolvePlaybackWaiter(audioTurnId)
+      this._resolvePlaybackWaiter(turnId)
     }
   }
 
@@ -292,22 +338,9 @@ export class VoiceInterviewEngine {
     resolve()
   }
 
-  _queueSpokenText(text) {
+  _queueSpokenText(text, sequence = null, questionId = null) {
     if (!text || this.isStopped) return
-    this.spokenTextQueue.push(text)
-    if (this.isDrainingSpokenTextQueue) return
-    this.isDrainingSpokenTextQueue = true
-    void (async () => {
-      try {
-        while (this.spokenTextQueue.length && !this.isStopped) {
-          const nextText = this.spokenTextQueue.shift()
-          await this._synthesizeSpokenText(nextText)
-        }
-      } finally {
-        this.isDrainingSpokenTextQueue = false
-        if (this.spokenTextQueue.length && !this.isStopped) this._queueSpokenText(this.spokenTextQueue.shift())
-      }
-    })()
+    return this.speakAiQuestion({ text, sequence, questionId })
   }
 
   _handleGeminiMessage(message) {
@@ -422,11 +455,51 @@ export class VoiceInterviewEngine {
   }
 
   /**
-   * Speak question or AI prompt aloud
+   * Speak question or AI prompt aloud with strict question-turn identity and race prevention
    */
-  speakAiQuestion(spokenText, force = false) {
-    if (!spokenText || this.isStopped) return
-    console.log('[VoiceEngine] Speaking AI Question:', spokenText.slice(0, 60))
+  speakAiQuestion(payload, force = false) {
+    if (this.isStopped) return
+    let text = ''
+    let questionId = null
+    let sequence = null
+    let isFiller = false
+    let isForced = force
+
+    if (typeof payload === 'object' && payload !== null) {
+      text = String(payload.text || payload.spokenText || '').trim()
+      questionId = payload.questionId || null
+      sequence = typeof payload.sequence === 'number' ? payload.sequence : null
+      isFiller = Boolean(payload.isFiller)
+      if (payload.force !== undefined) isForced = Boolean(payload.force)
+    } else {
+      text = String(payload || '').trim()
+    }
+
+    if (!text) return
+
+    // Monotonic sequence guard: never speak a question older than our active question sequence
+    if (sequence != null && this.currentQuestionSequence != null && sequence < this.currentQuestionSequence) {
+      console.log(`[VoiceEngine] Monotonic Guard: Ignoring older question speech (seq ${sequence} < active ${this.currentQuestionSequence})`)
+      return
+    }
+
+    // Cancel any previous in-flight synthesis or playback
+    this.cancelCurrentAudio('New question/prompt initiated')
+
+    // Establish new canonical turn identity
+    this.currentTurnGeneration++
+    const generation = this.currentTurnGeneration
+    if (sequence != null && !isFiller) {
+      this.currentQuestionSequence = sequence
+      this.currentQuestionId = questionId
+    }
+
+    const turnId = `qturn-${sequence != null ? `seq${sequence}` : (isFiller ? 'filler' : 'prompt')}-${generation}-${Date.now()}`
+    this.activeAudioTurnId = turnId
+    this.activePlaybackSequence = sequence
+    this.activePlaybackQuestionId = questionId
+
+    console.log(`[VoiceEngine] Starting speech turn [${turnId}]: "${text.slice(0, 50)}..."`)
 
     this.isAiTurnActive = true
     this.isPlaying = true
@@ -435,20 +508,41 @@ export class VoiceInterviewEngine {
     this._muteMicrophoneHardware(true)
     this._updateState('SPEAKING')
 
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this._initializeVoiceTransport()
-    }
+    this.aiAudioPlayer.beginTurn(turnId, sequence)
 
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this._sendGatewayMessage({
-        type: force ? 'repeat_question' : 'speak_question',
-        text: spokenText,
-        force,
-      })
-      return
-    }
+    this._synthesizeSpokenText({
+      text,
+      turnId,
+      generation,
+      sequence,
+      questionId,
+    })
+  }
 
-    this.speakDirectSpeech(spokenText)
+  /**
+   * Cancel and flush any active or in-flight interviewer audio immediately
+   */
+  cancelCurrentAudio(reason = 'Cancelled') {
+    if (this.activeAudioTurnId) {
+      this.cancelledTurns.add(this.activeAudioTurnId)
+    }
+    this.currentTurnGeneration++
+    if (this.ttsAbortController) {
+      try { this.ttsAbortController.abort(reason) } catch (_) {}
+      this.ttsAbortController = null
+    }
+    this.spokenTextQueue = []
+    if (this.turnCompletionTimer) {
+      clearTimeout(this.turnCompletionTimer)
+      this.turnCompletionTimer = null
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try { window.speechSynthesis.cancel() } catch (_) {}
+    }
+    this.aiAudioPlayer.flush()
+    this.isPlaying = false
+    this.isAiTurnActive = false
+    this._resolvePlaybackWaiter(this.activeAudioTurnId)
   }
 
   /**
@@ -460,84 +554,18 @@ export class VoiceInterviewEngine {
   }
 
   /**
-   * Speak direct text aloud using browser SpeechSynthesis with maximum clarity and 0ms latency.
+   * Speak direct text aloud using the unified server TTS interviewer voice pipeline.
    * Auto-mutes microphone hardware during speech to prevent audio feedback.
    */
-  speakDirectSpeech(text, { onEnd, rate = 1.0, pitch = 1.0, volume = 1.0 } = {}) {
+  speakDirectSpeech(text, { onEnd } = {}) {
     if (!text || this.isStopped) return Promise.resolve()
 
-    console.log('[VoiceEngine] speakDirectSpeech aloud:', text)
-
-    return new Promise((resolve) => {
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-        console.warn('[VoiceEngine] SpeechSynthesis not available in this environment, queuing spoken text')
-        this._queueSpokenText(text)
-        resolve()
-        return
-      }
-
-      try {
-        if (window.speechSynthesis.paused) {
-          window.speechSynthesis.resume()
-        }
-        window.speechSynthesis.cancel()
-
-        const utterance = new SpeechSynthesisUtterance(text)
-        utterance.volume = Math.max(0.1, Math.min(1.0, volume))
-        utterance.rate = rate
-        utterance.pitch = pitch
-        utterance.lang = this.language || 'en-US'
-
-        const voice = this._getPreferredSpeechVoice()
-        if (voice) {
-          utterance.voice = voice
-        }
-
-        // Echo protection: Mute microphone hardware while AI speaks aloud
-        this.isAutoMutedWhileSpeaking = true
-        this._muteMicrophoneHardware(true)
-        this.isPlaying = true
-        this.audioState = 'AI_SPEAKING'
-        this._updateState('SPEAKING')
-
-        let completed = false
-        const finalize = () => {
-          if (completed) return
-          completed = true
-          this.isPlaying = false
-          this.audioState = 'IDLE'
-          this.isAutoMutedWhileSpeaking = false
-          this._muteMicrophoneHardware(false)
-          this._concludeAiSpeakingTurn()
-          if (onEnd) onEnd()
-          resolve()
-        }
-
-        utterance.onend = () => {
-          finalize()
-        }
-
-        utterance.onerror = (err) => {
-          console.warn('[VoiceEngine] SpeechSynthesis utterance error:', err)
-          finalize()
-        }
-
-        // Safety watchdog: ensure speech turn never hangs if onend fails to fire in browser
-        const wordCount = text.trim().split(/\s+/).length
-        const estimatedDurationMs = Math.max(2500, Math.ceil((wordCount / 2.5) * 1000) + 1200)
-        setTimeout(() => {
-          finalize()
-        }, estimatedDurationMs)
-
-        window.speechSynthesis.speak(utterance)
-
-        // Store reference to utterance to prevent Chrome garbage-collection bug
-        this._currentDirectUtterance = utterance
-      } catch (err) {
-        console.warn('[VoiceEngine] speakDirectSpeech failed:', err)
-        resolve()
-      }
-    })
+    console.log('[VoiceEngine] speakDirectSpeech aloud via server TTS pipeline:', text)
+    this.speakAiQuestion({ text, force: true })
+    if (onEnd) {
+      setTimeout(onEnd, Math.min(10000, Math.max(1000, text.length * 60)))
+    }
+    return Promise.resolve()
   }
 
   /**
@@ -562,7 +590,7 @@ export class VoiceInterviewEngine {
       : nudge2Phrases[Math.floor(Math.random() * nudge2Phrases.length)]
 
     console.log(`[VoiceEngine] Speaking unified CosyVoice silence nudge #${level}:`, chosen)
-    this.speakAiQuestion(chosen)
+    this.speakAiQuestion({ text: chosen, isFiller: true })
 
     return chosen
   }
@@ -909,7 +937,7 @@ export class VoiceInterviewEngine {
 
         case 'ai_transcript_delta':
           if (!this.hasEnteredRoom) break
-          this.onTranscript({ text: msg.text, isDelta: true, speaker: 'AI' })
+          this.onTranscript({ text: msg.text, isDelta: true, speaker: 'AI', sequence: msg.sequence })
           break
 
         case 'ai_transcript_complete':
@@ -918,6 +946,7 @@ export class VoiceInterviewEngine {
           this.onTranscript({
             text: msg.fullTranscript,
             questionText: msg.questionText,
+            sequence: msg.sequence,
             isNudge: msg.isNudge,
             isTermination: msg.isTermination,
             isFinal: true,
@@ -1059,11 +1088,11 @@ export class VoiceInterviewEngine {
     }, timeoutMs)
   }
 
-  _beginAudioTurn(turnId) {
+  _beginAudioTurn(turnId, sequence = null) {
     this._resetTurnCompletionTimer(90000)
 
     if (turnId != null && this.activeAudioTurnId === turnId) return
-    this.aiAudioPlayer.beginTurn(turnId)
+    this.aiAudioPlayer.beginTurn(turnId, sequence)
     this.activeAudioTurnId = turnId ?? this.aiAudioPlayer.turnId
     this.latestAiTranscript = ''
     this.audioPlaybackFailed = false
@@ -1073,7 +1102,22 @@ export class VoiceInterviewEngine {
   _playAiAudioChunk(chunkPayload) {
     if (!this.hasEnteredRoom) return Promise.resolve()
     if (this.isStopped) return Promise.resolve()
-    if (chunkPayload?.audioTurnId != null && chunkPayload.audioTurnId !== this.activeAudioTurnId) this._beginAudioTurn(chunkPayload.audioTurnId)
+    if (chunkPayload?.audioTurnId && this.cancelledTurns.has(chunkPayload.audioTurnId)) {
+      return Promise.resolve()
+    }
+    const incomingSeq = typeof chunkPayload?.questionSequence === 'number'
+      ? chunkPayload.questionSequence
+      : (typeof chunkPayload?.sequence === 'number' ? chunkPayload.sequence : null)
+    if (incomingSeq != null && this.currentQuestionSequence != null && incomingSeq < this.currentQuestionSequence) {
+      return Promise.resolve()
+    }
+    if (chunkPayload?.audioTurnId != null && this.activeAudioTurnId != null && chunkPayload.audioTurnId !== this.activeAudioTurnId) {
+      // Chunk belongs to an inactive or superseded turn; drop it
+      return Promise.resolve()
+    }
+    if (chunkPayload?.audioTurnId != null && this.activeAudioTurnId == null) {
+      this._beginAudioTurn(chunkPayload.audioTurnId, incomingSeq)
+    }
     this.hasReceivedNativeAudioInCurrentTurn = true
     this.isAiTurnActive = true
     // Reset watchdog on each active audio chunk: as long as AI is playing chunks, keep turn alive!
@@ -1082,6 +1126,9 @@ export class VoiceInterviewEngine {
   }
 
   _handleAiTurnComplete(message) {
+    if (message.audioTurnId && this.cancelledTurns.has(message.audioTurnId)) {
+      return
+    }
     const isMatchingTurn =
       message.audioTurnId == null ||
       this.activeAudioTurnId == null ||
@@ -1099,12 +1146,6 @@ export class VoiceInterviewEngine {
 
     if (message.audioUnavailable || this.audioPlaybackFailed || !this.hasReceivedNativeAudioInCurrentTurn) {
       this._stopAiAudioPlayback()
-      const textToSpeak = message.fullTranscript || this.latestAiTranscript || ''
-      if (textToSpeak && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        console.log('[VoiceEngine] No server audio chunks received for turn; speaking aloud via direct speech fallback:', textToSpeak)
-        this.speakDirectSpeech(textToSpeak)
-        return
-      }
       this._concludeAiSpeakingTurn()
       return
     }
@@ -1194,19 +1235,7 @@ export class VoiceInterviewEngine {
    * Stop all active playing audio sources on interruption
    */
   _stopAiAudioPlayback() {
-    if (this.turnCompletionTimer) {
-      clearTimeout(this.turnCompletionTimer)
-      this.turnCompletionTimer = null
-    }
-    this.isAiTurnActive = false
-    this.isPlaying = false
-    this.hasReceivedNativeAudioInCurrentTurn = false
-    this.spokenTextQueue = []
-    this.ttsAbortController?.abort()
-    this.ttsAbortController = null
-    for (const resolve of this.playbackWaiters.values()) resolve()
-    this.playbackWaiters.clear()
-    this.aiAudioPlayer.stop()
+    this.cancelCurrentAudio('Interruption')
     this.audioState = 'INTERRUPTED'
   }
 
@@ -1223,30 +1252,47 @@ export class VoiceInterviewEngine {
       this.recognition.interimResults = true
       this.recognition.maxAlternatives = 1
       this.recognition.lang = this.language || 'en-IN'
+      this._recognitionSessionId = `sess_${Date.now()}`
+      this._lastFinalizedIndex = -1
+      this._pendingInterimTranscript = ''
 
       this.recognition.onresult = (event) => {
-        let interimTranscript = ''
-        let finalTranscript = ''
+        let currentInterim = ''
 
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
+        // 1. Process any newly finalized results strictly once by tracking last finalized index
+        for (let i = this._lastFinalizedIndex + 1; i < event.results.length; ++i) {
           const res = event.results[i]
-          const transcript = res[0]?.transcript || ''
           if (res.isFinal) {
-            finalTranscript += transcript
-          } else {
-            interimTranscript += transcript
+            const transcript = (res[0]?.transcript || '').trim()
+            this._lastFinalizedIndex = i
+            this._pendingInterimTranscript = ''
+            if (transcript) {
+              const segId = `${this._recognitionSessionId}_${i}`
+              this.onCandidateSpeech({
+                text: transcript,
+                isInterim: false,
+                isFinal: true,
+                segmentId: segId,
+              })
+            }
+          }
+        }
+
+        // 2. Aggregate only unfinalized results beyond the last finalized index
+        for (let i = this._lastFinalizedIndex + 1; i < event.results.length; ++i) {
+          const res = event.results[i]
+          if (!res.isFinal) {
+            currentInterim += (res[0]?.transcript || '')
           }
         }
 
         // Interruption & Barge-in Handling while AI is actively speaking:
         if (this.conversationState === 'SPEAKING' && this.isAiTurnActive) {
-          // If "Prevent AI Interruption" is enabled, background noise / speech MUST NOT interrupt the AI!
           if (this.preventAiInterruption) {
             return
           }
 
-          // Only allow intentional barge-in if candidate spoke multiple distinct words
-          const words = (interimTranscript || finalTranscript).trim().split(/\s+/)
+          const words = (currentInterim).trim().split(/\s+/)
           if (words.length >= 2) {
             console.log('[VoiceEngine] Candidate intentional barge-in detected. Halting AI speech.')
             this._stopAiAudioPlayback()
@@ -1267,14 +1313,15 @@ export class VoiceInterviewEngine {
           return
         }
 
-        // Stream real-time speech into candidate's response box
-        if (interimTranscript) {
-          this.onCandidateSpeech({ text: interimTranscript, isInterim: true, isFinal: false })
-        }
-
-        if (finalTranscript && finalTranscript.trim()) {
-          this.onCandidateSpeech({ text: finalTranscript.trim(), isInterim: false, isFinal: true })
-        }
+        // 3. Emit interim preview for currently spoken words
+        const trimmedInterim = currentInterim.trim()
+        this._pendingInterimTranscript = trimmedInterim
+        this.onCandidateSpeech({
+          text: trimmedInterim,
+          isInterim: true,
+          isFinal: false,
+          segmentId: `${this._recognitionSessionId}_interim`,
+        })
       }
 
       this.recognition.onstart = () => {
@@ -1292,6 +1339,8 @@ export class VoiceInterviewEngine {
 
       this.recognition.onend = () => {
         this.isRecognizing = false
+        this._lastFinalizedIndex = -1
+        this._pendingInterimTranscript = ''
         if (
           this.isConnected &&
           !this.isMuted &&
@@ -1302,6 +1351,8 @@ export class VoiceInterviewEngine {
           this.recognition
         ) {
           try {
+            this._recognitionSessionId = `sess_${Date.now()}`
+            this._lastFinalizedIndex = -1
             this.recognition.start()
             this.isRecognizing = true
           } catch (_) {}
@@ -1322,6 +1373,9 @@ export class VoiceInterviewEngine {
    * Called when transitioning to a new question so previous turn speech never leaks over.
    */
   resetCandidateSpeechRecognition() {
+    this._pendingInterimTranscript = ''
+    this._lastFinalizedIndex = -1
+    this._recognitionSessionId = `sess_${Date.now()}`
     if (this.recognition) {
       try {
         this.recognition.abort()
@@ -1329,6 +1383,8 @@ export class VoiceInterviewEngine {
       setTimeout(() => {
         if (this.isConnected && !this.isMuted && !this.isAutoMutedWhileSpeaking && this.conversationState !== 'SPEAKING') {
           try {
+            this._recognitionSessionId = `sess_${Date.now()}`
+            this._lastFinalizedIndex = -1
             this.recognition.start()
           } catch (_) {}
         }

@@ -18,8 +18,13 @@ import {
   RefreshCw,
   Search,
   Filter,
+  Edit2,
+  Gauge,
+  Check,
+  X,
 } from 'lucide-react'
 import { rubricService } from '../../services/rubricService.js'
+import { jobService } from '../../services/jobService.js'
 import { normalizeApiError } from '../../utils/errorNormalizer.js'
 
 export default function RubricMatrixView({ job, onBack, onProceedToInvitations }) {
@@ -40,6 +45,15 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
   const [newQuestionType, setNewQuestionType] = useState('TECHNICAL')
   const [newQuestionDifficulty, setNewQuestionDifficulty] = useState('MEDIUM')
   const [newQuestionConcepts, setNewQuestionConcepts] = useState('')
+
+  // Target difficulty state (Requirement 9)
+  const [currentDifficulty, setCurrentDifficulty] = useState(job?.target_difficulty || 'MEDIUM')
+  const [isUpdatingDifficulty, setIsUpdatingDifficulty] = useState(false)
+
+  // Opening Question Editor state (Requirement 8)
+  const [editingOpeningQuestion, setEditingOpeningQuestion] = useState(false)
+  const [openingQuestionDraft, setOpeningQuestionDraft] = useState('')
+  const [isSavingOpeningQuestion, setIsSavingOpeningQuestion] = useState(false)
 
   const fetchRubricAndQuestions = async () => {
     if (!job?.id) return
@@ -189,6 +203,66 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
     }
   }
 
+  const handleDifficultyChange = async (newDiff) => {
+    if (!job?.id || newDiff === currentDifficulty || isUpdatingDifficulty) return
+    setIsUpdatingDifficulty(true)
+    setError('')
+    setSuccessMessage('')
+    try {
+      await jobService.updateDifficulty(job.id, newDiff)
+      setCurrentDifficulty(newDiff)
+      setSuccessMessage(`Target interview difficulty updated to ${newDiff}! Realtime questions and adaptive policies will align with this baseline.`)
+    } catch (err) {
+      console.error('Failed to update difficulty:', err)
+      const normalized = normalizeApiError(err, 'Failed to update interview difficulty.')
+      setError(normalized.message)
+    } finally {
+      setIsUpdatingDifficulty(false)
+    }
+  }
+
+  const handleStartEditOpeningQuestion = (initialText) => {
+    setOpeningQuestionDraft(initialText || questions[0]?.question_text || job?.opening_question || '')
+    setEditingOpeningQuestion(true)
+  }
+
+  const handleSaveOpeningQuestion = async (e) => {
+    if (e) e.preventDefault()
+    const clean = openingQuestionDraft.trim()
+    if (!clean || clean.length < 5) {
+      setError('Opening question must be at least 5 characters long.')
+      return
+    }
+    setIsSavingOpeningQuestion(true)
+    setError('')
+    setSuccessMessage('')
+    try {
+      await jobService.updateOpeningQuestion(job.id, clean)
+      // Update local questions state so the first question reflects the edit immediately
+      setQuestions((prev) => {
+        if (prev.length === 0) {
+          return [{
+            id: 'opening-q-first',
+            question_text: clean,
+            type: 'TECHNICAL',
+            difficulty: currentDifficulty,
+            context_order: 1,
+            metadata: { topic: job?.department || 'Interview Opening' },
+          }]
+        }
+        return prev.map((q, idx) => (idx === 0 ? { ...q, question_text: clean } : q))
+      })
+      setEditingOpeningQuestion(false)
+      setSuccessMessage('First interview question updated and saved! The AI interviewer will start with this question.')
+    } catch (err) {
+      console.error('Failed to update opening question:', err)
+      const normalized = normalizeApiError(err, 'Failed to update opening question.')
+      setError(normalized.message)
+    } finally {
+      setIsSavingOpeningQuestion(false)
+    }
+  }
+
   const totalWeight = criteria.reduce((sum, c) => sum + (c.weight || 1), 0)
 
   const filteredQuestions = questions.filter((q) => {
@@ -212,6 +286,14 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
             <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-mono font-bold uppercase">
               {job?.seniority || 'SENIOR'}
             </span>
+            {job?.background_type && (
+              <>
+                <span className="text-slate-300">•</span>
+                <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-mono font-bold uppercase">
+                  {job.background_type === 'CUSTOM' ? (job.custom_background || 'CUSTOM') : job.background_type}
+                </span>
+              </>
+            )}
           </div>
           <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2.5">
             <Sliders className="w-5 h-5 text-blue-600" />
@@ -222,7 +304,34 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Difficulty Level Adjustment Control (Requirement 9) */}
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 shadow-xs">
+            <span className="text-[11px] font-bold text-slate-500 uppercase px-2 flex items-center gap-1">
+              <Gauge className="w-3.5 h-3.5 text-slate-400" /> Difficulty:
+            </span>
+            {['EASY', 'MEDIUM', 'HARD'].map((level) => (
+              <button
+                key={level}
+                type="button"
+                disabled={isUpdatingDifficulty}
+                onClick={() => handleDifficultyChange(level)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  currentDifficulty === level
+                    ? level === 'HARD'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : level === 'MEDIUM'
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+                title={`Set target interview difficulty to ${level}`}
+              >
+                {level}
+              </button>
+            ))}
+          </div>
+
           <button
             onClick={handleGenerateWithAI}
             disabled={isGenerating}
@@ -481,6 +590,61 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
               </div>
             </div>
 
+            {/* Opening Question Editor Modal / Panel (Requirement 8) */}
+            {editingOpeningQuestion && (
+              <div className="p-4 bg-indigo-50/70 border-2 border-indigo-300 rounded-2xl space-y-3 shadow-sm animate-in fade-in duration-150">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-600" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                      Customize First Interview Question (Opening Question)
+                    </h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditingOpeningQuestion(false)}
+                    className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-indigo-800">
+                  The AI interviewer will ask this opening question first. All subsequent turns and follow-ups will dynamically adapt based on candidate responses and the configured {job?.background_type || 'job'} background.
+                </p>
+                <textarea
+                  rows={3}
+                  required
+                  value={openingQuestionDraft}
+                  onChange={(e) => setOpeningQuestionDraft(e.target.value)}
+                  placeholder="Enter custom opening question prompt..."
+                  className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                />
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-slate-500">
+                    Background: <strong className="text-slate-700">{job?.background_type === 'CUSTOM' ? job?.custom_background : job?.background_type || 'TECHNICAL'}</strong>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingOpeningQuestion(false)}
+                      className="px-3 py-1.5 border border-slate-200 bg-white rounded-xl text-xs text-slate-600 hover:bg-slate-50 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSavingOpeningQuestion}
+                      onClick={handleSaveOpeningQuestion}
+                      className="px-4 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold hover:bg-indigo-700 cursor-pointer flex items-center gap-1.5 shadow-xs"
+                    >
+                      {isSavingOpeningQuestion ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                      <span>Save Opening Question</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Custom Question Form */}
             {showAddQuestion && (
               <form onSubmit={handleAddCustomQuestion} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
@@ -569,13 +733,25 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
                   TECHNICAL: 'bg-slate-100 text-slate-700 border-slate-200',
                 }
 
+                const isOpeningQuestion = questions.length > 0 && q.id === questions[0]?.id
+
                 return (
                   <div
                     key={q.id || idx}
-                    className="p-4 rounded-xl bg-white border border-slate-200 hover:border-slate-300 shadow-xs flex flex-col sm:flex-row sm:items-start justify-between gap-3 transition"
+                    className={`p-4 rounded-xl bg-white border transition flex flex-col sm:flex-row sm:items-start justify-between gap-3 shadow-xs ${
+                      isOpeningQuestion
+                        ? 'border-indigo-400/80 bg-indigo-50/15 ring-1 ring-indigo-200'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
                   >
                     <div className="space-y-2.5 flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center flex-wrap gap-2">
+                        {isOpeningQuestion && (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase tracking-wider bg-indigo-100 text-indigo-800 border border-indigo-200 flex items-center gap-1 shadow-2xs">
+                            <Sparkles className="w-3 h-3 text-indigo-600" />
+                            Opening Question (Q1)
+                          </span>
+                        )}
                         <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase tracking-wider border ${typeBadgeColors[q.type] || 'bg-slate-100 text-slate-700 border-slate-200'}`}>
                           {q.type.replace(/_/g, ' ')}
                         </span>
@@ -635,13 +811,26 @@ export default function RubricMatrixView({ job, onBack, onProceedToInvitations }
                       )}
                     </div>
 
-                    <button
-                      onClick={() => handleDeleteQuestion(q.id)}
-                      className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition shrink-0 cursor-pointer"
-                      title="Delete Question"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isOpeningQuestion && (
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditOpeningQuestion(q.question_text)}
+                          className="px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 flex items-center gap-1 transition cursor-pointer"
+                          title="Edit First Interview Question (Opening Question)"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteQuestion(q.id)}
+                        className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition shrink-0 cursor-pointer"
+                        title="Delete Question"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 )
               })}

@@ -4,6 +4,8 @@
  * and normalizes questions into a typed model with options, code snippets, and metadata.
  */
 
+import { normalizeQuestionType } from './questionTypeRegistry.js'
+
 /**
  * Filter out AI internal thoughts, meta-planning, and evaluator labels
  */
@@ -50,25 +52,37 @@ export function extractCleanQuestionPrompt(rawText) {
 
   // Split into sentences using punctuation boundaries
   const sentences = clean.split(/(?<=[.?!])\s+/).filter(Boolean)
+  if (sentences.length <= 1) return clean
 
-  // Look for interrogative or direct technical prompts
-  const questionSentences = sentences.filter((s) => {
-    const st = s.trim()
-    return (
-      st.endsWith('?') ||
-      /^(Could you|Can you|How would you|How do you|What is|What are|Why would|Which of|Please explain|Walk me through|Tell me about|Describe|Implement|Write a|Given that)/i.test(
-        st
-      )
-    )
-  })
+  // Introductory conversational greetings, feedback, or transitions to strip from AI speech
+  const introPatterns = [
+    /^(hello|hi|hey|welcome|good (morning|afternoon|evening))/i,
+    /^(great|awesome|perfect|excellent|good) (job|answer|response|work)/i,
+    /^(that's|that was|this is|it's) (a )?(very )?(solid|good|great|awesome|perfect|excellent|nice)/i,
+    /^(thank you|thanks)( for (your answer|that|clarifying))?/i,
+    /^(let's|let us) (begin|start|move on|continue|transition|explore|now look at|discuss)/i,
+    /^now (let's|we will|i'd like to|i will)/i,
+    /^for this (role|position|next|interview)/i,
+    /^(take a moment to|feel free to)/i,
+    /^(alright|all right|okay|ok)[,.]?/i,
+  ]
 
-  if (questionSentences.length > 0) {
-    // Return all questions found or the last 1-2 focused questions
-    return questionSentences.join(' ').trim()
+  let firstContentIndex = 0
+  for (let i = 0; i < sentences.length; i++) {
+    const s = sentences[i].trim()
+    if (introPatterns.some((p) => p.test(s)) || isThoughtOrMetaPlanning(s)) {
+      firstContentIndex = i + 1
+    } else {
+      break
+    }
   }
 
-  // If no explicit question mark, return last sentence or cleaned text
-  return sentences.length > 1 ? sentences[sentences.length - 1].trim() : clean
+  const contentSentences = sentences.slice(firstContentIndex)
+  if (contentSentences.length > 0) {
+    return contentSentences.join(' ').trim()
+  }
+
+  return clean
 }
 
 /**
@@ -144,18 +158,16 @@ function extractCodeSnippet(text) {
  */
 export function detectQuestionType(questionData, cleanPrompt, rawText = '') {
   const meta = questionData?.metadata || {}
-  const rawType = (questionData?.type || meta.type || '').toUpperCase()
+  const rawType = questionData?.type || meta.type || ''
 
-  // 1. Explicit database / metadata match
-  if (['MULTIPLE_CHOICE', 'SINGLE_CHOICE', 'MCQ'].includes(rawType)) return 'MULTIPLE_CHOICE'
-  if (rawType === 'MULTI_SELECT') return 'MULTI_SELECT'
-  if (['FILL_IN_THE_BLANK', 'FILL_BLANK'].includes(rawType)) return 'FILL_IN_THE_BLANK'
-  if (['CODE_OUTPUT', 'OUTPUT_PREDICTION'].includes(rawType)) return 'CODE_OUTPUT'
-  if (['CODE_WRITING', 'CODING', 'CODE'].includes(rawType)) return 'CODE_WRITING'
-  if (['SQL', 'DATABASE_QUERY'].includes(rawType)) return 'SQL'
-  if (['TRUE_FALSE', 'YES_NO', 'BOOLEAN'].includes(rawType)) return 'TRUE_FALSE'
-  if (['SYSTEM_DESIGN', 'SCENARIO'].includes(rawType)) return 'SCENARIO'
-  if (rawType === 'BEHAVIORAL') return 'BEHAVIORAL'
+  // 1. Authoritative Question Type Registry check
+  if (rawType) {
+    const canonical = normalizeQuestionType(rawType)
+    if (canonical && canonical !== 'DESCRIPTIVE') return canonical
+    if (['DESCRIPTIVE', 'ESSAY', 'OPEN_ENDED', 'BEHAVIORAL'].includes(String(rawType).toUpperCase())) {
+      return String(rawType).toUpperCase() === 'BEHAVIORAL' ? 'BEHAVIORAL' : 'DESCRIPTIVE'
+    }
+  }
 
   const prompt = rawText || cleanPrompt || questionData?.question_text || ''
   const lower = prompt.toLowerCase()
@@ -244,49 +256,118 @@ export function detectQuestionType(questionData, cleanPrompt, rawText = '') {
  * Main Normalizer: Takes raw question data + live speech question and returns a structured question model
  */
 export function normalizeQuestion(questionData, liveQuestionText, turnIndex = 0) {
-  const rawText = liveQuestionText || questionData?.question_text || ''
-  const cleanText = extractCleanQuestionPrompt(rawText) || questionData?.question_text || rawText
+  // CRITICAL ARCHITECTURAL SEPARATION:
+  // The authoritative canonical question text comes strictly from the backend question record.
+  // We NEVER derive the main question title from streaming AI speech transcripts.
+  const canonicalText = (questionData?.question_text || questionData?.text || '').trim()
+  const rawText = canonicalText || (typeof liveQuestionText === 'string' ? liveQuestionText.trim() : '')
+
+  // Clean question prompt:
+  // If canonicalText exists, clean only outer markdown formatting while preserving
+  // all setup sentences, premises, numeric constraints, punctuation, and instructions.
+  // If only raw speech is present, strip leading conversational intro greetings.
+  let cleanText = ''
+  if (canonicalText) {
+    cleanText = canonicalText
+      .replace(/^#+\s+/gm, '')
+      .replace(/\*\*.*?\*\*/g, (m) => m.replace(/\*\*/g, ''))
+      .replace(/^[A-Z\s]+:\s*/, '')
+      .trim()
+  } else if (rawText) {
+    cleanText = extractCleanQuestionPrompt(rawText) || rawText
+  }
+
+  // Turn 0 fallback if prompt is empty
+  if (!cleanText && turnIndex === 0) {
+    cleanText = 'Could you please introduce yourself and share your background?'
+  }
+
   const detectedType = detectQuestionType(questionData, cleanText, rawText)
   const meta = questionData?.metadata || {}
 
   // Parse options for MCQ / Multi-select
   let options = []
-  {
-    const rawOptionsList = (Array.isArray(questionData?.options) && questionData.options.length >= 2)
+  const rawOptionsList =
+    Array.isArray(questionData?.options) && questionData.options.length >= 2
       ? questionData.options
-      : (Array.isArray(meta.options) && meta.options.length >= 2)
+      : Array.isArray(meta.options) && meta.options.length >= 2
       ? meta.options
       : null
 
-    if (rawOptionsList) {
-      options = rawOptionsList.map((opt, i) => {
-        if (typeof opt === 'string') {
-          const letter = String.fromCharCode(65 + i)
-          const cleanLabel = opt.replace(/^[A-D1-4][\)\.:]\s*/i, '').trim()
-          return { id: `opt-${letter.toLowerCase()}`, key: letter, label: cleanLabel || opt }
-        }
-        return {
-          id: opt.id || `opt-${opt.key ? opt.key.toLowerCase() : String.fromCharCode(97 + i)}`,
-          key: opt.key || String.fromCharCode(65 + i),
-          label: (opt.label || opt.text || String(opt)).replace(/^[A-D1-4][\)\.:]\s*/i, '').trim(),
-        }
-      })
-    } else {
-      const rawOpts = parseEmbeddedOptions(rawText)
-      options = rawOpts.length >= 2 ? rawOpts : parseEmbeddedOptions(cleanText)
-    }
+  if (rawOptionsList) {
+    options = rawOptionsList.map((opt, i) => {
+      if (typeof opt === 'string') {
+        const letter = String.fromCharCode(65 + i)
+        const cleanLabel = opt.replace(/^[A-D1-4][\)\.:]\s*/i, '').trim()
+        return { id: `opt-${letter.toLowerCase()}`, key: letter, label: cleanLabel || opt }
+      }
+      return {
+        id: opt.id || `opt-${opt.key ? opt.key.toLowerCase() : String.fromCharCode(97 + i)}`,
+        key: opt.key || String.fromCharCode(65 + i),
+        label: (opt.label || opt.text || String(opt)).replace(/^[A-D1-4][\)\.:]\s*/i, '').trim(),
+      }
+    })
+  } else {
+    const rawOpts = parseEmbeddedOptions(rawText)
+    options = rawOpts.length >= 2 ? rawOpts : parseEmbeddedOptions(cleanText)
   }
 
-  // Strip parsed options from display prompt if detected in text
+  // Display prompt for the main question title:
+  // Must NEVER split on ordinary words like " a " (which previously corrupted "If a store..." or "receives a 20%..." to "If").
+  // Only strip embedded multiline options if options were NOT already provided as structured list.
   let displayPrompt = cleanText
-  if (options.length >= 2) {
-    displayPrompt = cleanText.split(/(?:^|\n|\s+)[A-D1-4][\).\s]+/i)[0].trim() || cleanText
+  if (!rawOptionsList && options.length >= 2) {
+    displayPrompt = cleanText.split(/(?:\r?\n\s*)[A-D1-4][\)\.]\s+/i)[0].trim() || cleanText
+  }
+
+  // Absolute fallback: ensure displayPrompt is never empty if canonical text was supplied
+  if (!displayPrompt && canonicalText) {
+    displayPrompt = canonicalText
   }
 
   // Extract code snippet for code-related types
   const extractedCode = extractCodeSnippet(cleanText) || extractCodeSnippet(rawText)
-  const codeSnippet = questionData?.code_snippet || meta.code_snippet || meta.code || extractedCode?.code || null
-  const language = questionData?.language || meta.language || extractedCode?.language || (detectedType === 'SQL' ? 'sql' : 'javascript')
+  const codeSnippet =
+    questionData?.code_snippet ||
+    meta.code_snippet ||
+    meta.code ||
+    extractedCode?.code ||
+    null
+  const language =
+    questionData?.language ||
+    meta.language ||
+    extractedCode?.language ||
+    (detectedType === 'SQL' ? 'sql' : 'javascript')
+
+  // Extract items for ARRANGE_ORDER / ordering questions
+  const rawItemsList =
+    Array.isArray(questionData?.items) && questionData.items.length > 0
+      ? questionData.items
+      : Array.isArray(meta?.items) && meta.items.length > 0
+      ? meta.items
+      : (detectedType === 'ARRANGE_ORDER' && Array.isArray(questionData?.options) && questionData.options.length > 0)
+      ? questionData.options
+      : (detectedType === 'ARRANGE_ORDER' && Array.isArray(meta?.options) && meta.options.length > 0)
+      ? meta.options
+      : []
+
+  const items = rawItemsList.map((item, idx) => {
+    if (typeof item === 'string') {
+      return { id: `item-${idx + 1}`, label: item.trim() }
+    }
+    return {
+      id: item?.id || `item-${idx + 1}`,
+      label: String(item?.label || item?.text || item || '').trim(),
+    }
+  })
+
+  // Extract pairs for MATCHING_PAIRS
+  const leftItems = Array.isArray(questionData?.leftItems) ? questionData.leftItems : (Array.isArray(questionData?.left_items) ? questionData.left_items : (Array.isArray(meta?.leftItems) ? meta.leftItems : (Array.isArray(meta?.left_items) ? meta.left_items : [])))
+  const rightItems = Array.isArray(questionData?.rightItems) ? questionData.rightItems : (Array.isArray(questionData?.right_items) ? questionData.right_items : (Array.isArray(meta?.rightItems) ? meta.rightItems : (Array.isArray(meta?.right_items) ? meta.right_items : [])))
+
+  // Extract configs for slider & numerical questions
+  const sliderConfig = questionData?.sliderConfig || questionData?.slider_config || meta?.sliderConfig || meta?.slider_config || null
+  const numericalConfig = questionData?.numericalConfig || questionData?.numerical_config || meta?.numericalConfig || meta?.numerical_config || null
 
   return {
     id: questionData?.id || `turn-q-${turnIndex}`,
@@ -297,6 +378,11 @@ export function normalizeQuestion(questionData, liveQuestionText, turnIndex = 0)
     difficulty: questionData?.difficulty || meta.difficulty || 'MEDIUM',
     turnIndex,
     options,
+    items,
+    leftItems,
+    rightItems,
+    sliderConfig,
+    numericalConfig,
     language,
     codeSnippet,
     expectedConcepts: meta.expected_concepts || [],

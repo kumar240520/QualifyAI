@@ -74,10 +74,69 @@ export const jobController = {
         description: validated.description,
         department: validated.department,
         seniority: validated.seniority,
+        background_type: validated.background_type,
+        custom_background: validated.custom_background,
+        allowed_question_types: validated.allowed_question_types,
+        custom_question_types: validated.custom_question_types,
+        ask_about_projects: validated.ask_about_projects,
+        opening_question: validated.opening_question,
+        target_difficulty: validated.target_difficulty,
         userToken: req.token,
       })
 
       return res.status(201).json({ success: true, data: job })
+    } catch (err) {
+      next(err)
+    }
+  },
+
+  /**
+   * Update existing job requisition
+   */
+  async updateJob(req, res, next) {
+    try {
+      const organizationId = req.tenant?.organizationId || req.organizationId
+      const jobId = req.params.id
+
+      if (!organizationId) {
+        throw new ForbiddenError('Tenant organization context is missing.')
+      }
+
+      const { validateUpdateJobPayload } = await import('../validators/index.js')
+      const validated = assertValid(validateUpdateJobPayload(req.body))
+
+      const updated = await jobService.updateJob({
+        jobId,
+        organizationId,
+        updateData: validated,
+        userToken: req.token,
+      })
+
+      return res.status(200).json({ success: true, data: updated })
+    } catch (err) {
+      next(err)
+    }
+  },
+
+  /**
+   * Delete / archive job requisition
+   */
+  async deleteJob(req, res, next) {
+    try {
+      const organizationId = req.tenant?.organizationId || req.organizationId
+      const jobId = req.params.id
+
+      if (!organizationId) {
+        throw new ForbiddenError('Tenant organization context is missing.')
+      }
+
+      const result = await jobService.deleteJob({
+        jobId,
+        organizationId,
+        userToken: req.token,
+      })
+
+      return res.status(200).json({ success: true, message: result.message, data: result })
     } catch (err) {
       next(err)
     }

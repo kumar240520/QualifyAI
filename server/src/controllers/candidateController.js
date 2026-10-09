@@ -144,4 +144,35 @@ export const candidateController = {
       next(err)
     }
   },
+
+  /**
+   * DELETE /api/jobs/:id/candidates/:candidateId
+   */
+  async deleteCandidate(req, res, next) {
+    try {
+      const jobId = req.params.id
+      const candidateId = req.params.candidateId
+      const organizationId = req.organizationId || req.tenant?.organizationId
+      const userToken = req.token || req.accessToken
+
+      if (!organizationId) {
+        throw new ForbiddenError('Tenant organization context is missing.')
+      }
+
+      const result = await candidateService.deleteCandidate({
+        jobId,
+        candidateId,
+        organizationId,
+        userToken,
+      })
+
+      return res.status(200).json({
+        success: true,
+        message: result.message,
+        data: result,
+      })
+    } catch (err) {
+      next(err)
+    }
+  },
 }

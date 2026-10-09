@@ -146,12 +146,29 @@ export const reportAnalyticsService = {
       reportRecord = created
     }
 
+    const { data: sessionData } = await supabase
+      .from('interview_sessions')
+      .select('session_metadata')
+      .eq('interview_id', interviewId)
+      .maybeSingle()
+    const sessionMeta = sessionData?.session_metadata || {}
+    const candidateFeedback = {
+      feedback: sessionMeta.candidate_feedback || null,
+      rating: sessionMeta.candidate_ai_rating || null,
+      submittedAt: sessionMeta.feedback_submitted_at || null,
+    }
+    const pillarCoverage = sessionMeta.coverage_matrix || []
+
     return {
       ...reportRecord,
       interview,
       candidate: interview.candidates,
       job: interview.jobs,
       evaluation,
+      candidate_feedback: candidateFeedback,
+      candidateFeedback,
+      pillar_coverage: pillarCoverage,
+      coverageMatrix: pillarCoverage,
     }
   },
 
@@ -177,11 +194,28 @@ export const reportAnalyticsService = {
       throw err
     }
 
+    const { data: sessionData } = await supabase
+      .from('interview_sessions')
+      .select('session_metadata')
+      .eq('interview_id', interviewId)
+      .maybeSingle()
+    const sessionMeta = sessionData?.session_metadata || {}
+    const candidateFeedback = {
+      feedback: sessionMeta.candidate_feedback || null,
+      rating: sessionMeta.candidate_ai_rating || null,
+      submittedAt: sessionMeta.feedback_submitted_at || null,
+    }
+    const pillarCoverage = sessionMeta.coverage_matrix || []
+
     return {
       ...report,
       interview: report.interviews,
       candidate: report.interviews?.candidates,
       job: report.interviews?.jobs,
+      candidate_feedback: candidateFeedback,
+      candidateFeedback,
+      pillar_coverage: pillarCoverage,
+      coverageMatrix: pillarCoverage,
     }
   },
 

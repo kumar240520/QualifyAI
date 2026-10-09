@@ -2,13 +2,60 @@ import { getServiceSupabaseClient } from '../../integrations/supabaseClient.js'
 import { answerAnalyzer } from './answerAnalyzer.js'
 import { adaptivePolicyService } from './adaptivePolicyService.js'
 import { rubricService } from '../rubricService.js'
-import { realtimeQuestionGenerator } from './realtimeQuestionGenerator.js'
+import { realtimeQuestionGenerator, resolvePermittedQuestionTypes } from './realtimeQuestionGenerator.js'
+import {
+  normalizeQuestionPayload,
+  validateQuestionSchema,
+  evaluateAnswerDeterministically,
+  normalizeQuestionType,
+} from './questionTypeRegistry.js'
 import { randomUUID } from 'node:crypto'
 import { validateActiveQuestionAnswer, parseInterviewDurationMinutes, createAnswerCommit, isRepeatQuestionRequest } from './interviewState.js'
+import { resolveFoundationalBackground } from './foundationalBackgroundResolver.js'
+import { questionPoolService } from './questionPoolService.js'
+import { resolvePillarTaxonomy } from './pillarTaxonomyService.js'
 
 const activeTurnPromises = new Map()
 const sessionStartPromises = new Map()
+const tokenContextCache = new Map()
+const TOKEN_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
+/**
+ * Requirement 3 & 7: Two Foundational Backgrounds Initial Welcome & Opening Question
+ */
+export function getBackgroundWelcome({ job, candidate }) {
+  const candidateName = candidate?.full_name ? `, ${candidate.full_name}` : ''
+  const jobRole = job?.title || 'this role'
+  const foundationalBg = resolveFoundationalBackground(job)
+  const askAboutProjects = job?.ask_about_projects !== false
+
+  let welcomeIntro = ''
+  let defaultOpeningQuestion = ''
+
+  if (foundationalBg === 'technical') {
+    welcomeIntro = `Welcome to QualifyAI${candidateName}. I will be your autonomous AI interviewer for the ${jobRole} position today. I'll ask you questions about your technical knowledge, problem-solving approach, and relevant project experience.`
+    defaultOpeningQuestion = `Welcome to QualifyAI! Please introduce yourself, your technical background, and your key project experience for the ${jobRole} position.`
+  } else {
+    welcomeIntro = `Welcome to QualifyAI${candidateName}. I will be your autonomous AI interviewer for the ${jobRole} position today. I'll ask you questions related to core competencies, key responsibilities, and relevant experience for this position.`
+    defaultOpeningQuestion = askAboutProjects
+      ? `Welcome to QualifyAI! Please introduce yourself and share your key experiences and initiatives relevant to the ${jobRole} position.`
+      : `Welcome to QualifyAI! Please introduce yourself and summarize your background and core strengths for the ${jobRole} position.`
+  }
+
+  // Recruiter custom opening question from Rubrics Matrix
+  const openingQuestionText = (job?.opening_question && String(job.opening_question).trim())
+    ? String(job.opening_question).trim()
+    : defaultOpeningQuestion
+
+  const spokenLeadIn = `${welcomeIntro} You can speak naturally or use the interactive on-screen editor, and submit your response whenever you are ready. To begin: ${openingQuestionText}`
+
+  return {
+    welcomeIntro,
+    questionText: openingQuestionText,
+    spokenLeadIn,
+    foundationalBackground: foundationalBg,
+  }
+}
 
 /**
  * Enterprise AI-Authoritative Interview Orchestrator
@@ -84,15 +131,114 @@ export const interviewEngineService = {
       code_snippet: codeSnippet,
       codeSnippet,
       language: generated.language || 'javascript',
+      items: Array.isArray(generated.items) ? generated.items : (Array.isArray(generated.metadata?.items) ? generated.metadata.items : []),
+      left_items: Array.isArray(generated.leftItems) ? generated.leftItems : (Array.isArray(generated.left_items) ? generated.left_items : []),
+      right_items: Array.isArray(generated.rightItems) ? generated.rightItems : (Array.isArray(generated.right_items) ? generated.right_items : []),
+      leftItems: Array.isArray(generated.leftItems) ? generated.leftItems : (Array.isArray(generated.left_items) ? generated.left_items : []),
+      rightItems: Array.isArray(generated.rightItems) ? generated.rightItems : (Array.isArray(generated.right_items) ? generated.right_items : []),
+      slider_config: generated.sliderConfig || generated.slider_config || null,
+      sliderConfig: generated.sliderConfig || generated.slider_config || null,
+      numerical_config: generated.numericalConfig || generated.numerical_config || null,
+      numericalConfig: generated.numericalConfig || generated.numerical_config || null,
       expected_concepts: generated.expectedConcepts || [],
       metadata: {
         type: generated.type,
         expected_concepts: generated.expectedConcepts || [],
+        expected_answer: generated.expectedAnswer || generated.expected_answer || null,
         rubric_focus: generated.skill || generated.topic || null,
         code_snippet: codeSnippet,
         codeSnippet,
         language: generated.language || 'javascript',
         options,
+        items: Array.isArray(generated.items) ? generated.items : [],
+        leftItems: Array.isArray(generated.leftItems) ? generated.leftItems : [],
+        rightItems: Array.isArray(generated.rightItems) ? generated.rightItems : [],
+        sliderConfig: generated.sliderConfig || null,
+        numericalConfig: generated.numericalConfig || null,
+      },
+    }
+  },
+
+  /**
+   * Requirement 13: Canonical Question Record Formatter for Pre-generated Pool Questions
+   * Synchronizes canonical text, independent pillar taxonomy, permitted type, and fixed difficulty.
+   */
+  _formatPoolQuestion(poolQ, sequence, sessionId, previousAnalysis = null) {
+    const questionText = (poolQ.question_text || poolQ.text || '').trim()
+    const options = Array.isArray(poolQ.options)
+      ? poolQ.options.map((option, index) => {
+          if (typeof option === 'object' && option !== null) {
+            return {
+              id: option.id || `opt-${index + 1}`,
+              key: option.key || String.fromCharCode(65 + index),
+              label: String(option.label || option.text || '').replace(/^[A-D]\)\s*/i, '').trim(),
+            }
+          }
+          const cleanLabel = String(option).replace(/^[A-D]\)\s*/i, '').trim()
+          return {
+            id: `opt-${index + 1}`,
+            key: String.fromCharCode(65 + index),
+            label: cleanLabel,
+          }
+        })
+      : []
+
+    const pillarName = poolQ.rubric_criterion_name || poolQ.skill || ''
+    let spokenLeadIn = questionText
+    if (sequence > 1 && pillarName) {
+      spokenLeadIn = `Thank you. Now moving to our assessment on ${pillarName}: ${questionText}`
+    }
+
+    const codeSnippet = poolQ.code_snippet || poolQ.codeSnippet || null
+
+    return {
+      id: poolQ.id || randomUUID(),
+      sessionId,
+      timestamp: new Date().toISOString(),
+      sequence,
+      question_text: questionText,
+      spoken_lead_in: spokenLeadIn,
+      type: poolQ.type,
+      difficulty: poolQ.difficulty || 'MEDIUM',
+      rubric_criterion_id: poolQ.rubric_criterion_id || null,
+      rubric_criterion_name: poolQ.rubric_criterion_name || null,
+      taxonomy_id: poolQ.taxonomy_id || null,
+      subtopic_id: poolQ.subtopic_id || null,
+      subtopic_name: poolQ.subtopic_name || null,
+      foundational_background: poolQ.foundational_background || null,
+      skill: poolQ.skill || pillarName,
+      topic: poolQ.topic || poolQ.subtopic_name || null,
+      relationship: 'CORE_PILLAR_QUESTION',
+      reason: `Assessing core pillar ${pillarName} from pre-generated assessment plan`,
+      based_on_question_id: null,
+      options,
+      code_snippet: codeSnippet,
+      codeSnippet,
+      language: poolQ.language || 'javascript',
+      items: Array.isArray(poolQ.items) ? poolQ.items : (poolQ.metadata?.items || []),
+      left_items: Array.isArray(poolQ.left_items) ? poolQ.left_items : (poolQ.leftItems || poolQ.metadata?.leftItems || []),
+      right_items: Array.isArray(poolQ.right_items) ? poolQ.right_items : (poolQ.rightItems || poolQ.metadata?.rightItems || []),
+      leftItems: Array.isArray(poolQ.left_items) ? poolQ.left_items : (poolQ.leftItems || poolQ.metadata?.leftItems || []),
+      rightItems: Array.isArray(poolQ.right_items) ? poolQ.right_items : (poolQ.rightItems || poolQ.metadata?.rightItems || []),
+      slider_config: poolQ.slider_config || poolQ.sliderConfig || null,
+      sliderConfig: poolQ.slider_config || poolQ.sliderConfig || null,
+      numerical_config: poolQ.numerical_config || poolQ.numericalConfig || null,
+      numericalConfig: poolQ.numerical_config || poolQ.numericalConfig || null,
+      expected_concepts: poolQ.expected_concepts || poolQ.expectedConcepts || [],
+      metadata: {
+        type: poolQ.type,
+        expected_concepts: poolQ.expected_concepts || poolQ.expectedConcepts || [],
+        expected_answer: poolQ.expected_answer || poolQ.expectedAnswer || null,
+        rubric_focus: poolQ.skill || poolQ.topic || null,
+        code_snippet: codeSnippet,
+        codeSnippet,
+        language: poolQ.language || 'javascript',
+        options,
+        items: Array.isArray(poolQ.items) ? poolQ.items : [],
+        leftItems: Array.isArray(poolQ.left_items) ? poolQ.left_items : (poolQ.leftItems || []),
+        rightItems: Array.isArray(poolQ.right_items) ? poolQ.right_items : (poolQ.rightItems || []),
+        sliderConfig: poolQ.slider_config || poolQ.sliderConfig || null,
+        numericalConfig: poolQ.numerical_config || poolQ.numericalConfig || null,
       },
     }
   },
@@ -101,6 +247,16 @@ export const interviewEngineService = {
    * Helper: verify token and load interview evaluation context. Question banks are never used at runtime.
    */
   async _resolveTokenContext(token, allowCompleted = false) {
+    const cached = tokenContextCache.get(token)
+    if (cached && Date.now() - cached.timestamp < TOKEN_CACHE_TTL_MS) {
+      if (!allowCompleted && (cached.invitation.status === 'COMPLETED' || cached.invitation.status === 'CANCELLED' || cached.invitation.status === 'TERMINATED')) {
+        const err = new Error('This single-use assessment session has already been completed or terminated. Re-entry is strictly prohibited.')
+        err.status = 403
+        throw err
+      }
+      return cached
+    }
+
     const supabase = getServiceSupabaseClient()
 
     const { data: invitation, error: invError } = await supabase
@@ -154,7 +310,9 @@ export const interviewEngineService = {
       .eq('id', organizationId)
       .maybeSingle()
 
-    return { invitation, job, candidate, rubric, organization, organizationId }
+    const resolved = { invitation, job, candidate, rubric, organization, organizationId, timestamp: Date.now() }
+    tokenContextCache.set(token, resolved)
+    return resolved
   },
 
   /**
@@ -256,36 +414,44 @@ export const interviewEngineService = {
       const latestCandidateAnswer = [...(existingTranscripts || [])].reverse().find((turn) => turn.speaker === 'CANDIDATE')
       const recoverySequence = recoveringLegacyTurn ? (Number(existingMeta.current_question_sequence) || 0) + 1 : 0
       if (!recoveringLegacyTurn) {
-        const candidateName = candidate?.full_name ? `, ${candidate.full_name}` : ''
-        const jobRole = job?.title || 'this role'
-        initialQuestion = {
+        const bgWelcome = getBackgroundWelcome({ job, candidate })
+        const { allPermittedTypes } = realtimeQuestionGenerator.resolvePermittedQuestionTypes
+          ? realtimeQuestionGenerator.resolvePermittedQuestionTypes(job)
+          : { allPermittedTypes: ['SHORT_ANSWER'] }
+        const initialType = allPermittedTypes.includes('BEHAVIORAL')
+          ? 'BEHAVIORAL'
+          : allPermittedTypes.includes('DESCRIPTIVE')
+          ? 'DESCRIPTIVE'
+          : (allPermittedTypes[0] || 'SHORT_ANSWER')
+
+        initialQuestion = normalizeQuestionPayload({
           id: randomUUID(),
           sessionId: existingSession?.id || null,
           timestamp: new Date().toISOString(),
           sequence: 0,
-          question_text: `Welcome to QualifyAI! Please introduce yourself, your technical background, and your key project experience for the ${jobRole} position.`,
-          spoken_lead_in: `Welcome to QualifyAI, ${candidateName}. I will be your autonomous AI interviewer for the ${jobRole} position today. In this session, I will guide you through adaptive technical questions one by one. You can speak naturally or use the interactive on-screen editor, and submit your response whenever you are ready. To begin, please introduce yourself, your technical background, and your key projects.`,
-          type: 'BEHAVIORAL',
-          difficulty: 'MEDIUM',
+          question_text: bgWelcome.questionText,
+          text: bgWelcome.questionText,
+          spoken_lead_in: bgWelcome.spokenLeadIn,
+          type: initialType,
+          difficulty: job?.target_difficulty || 'MEDIUM',
           rubric_criterion_id: null,
           skill: 'Professional background',
-          topic: 'Introduction & Room Guidelines',
+          topic: 'Introduction & Role Qualifications',
           relationship: 'INITIAL',
-          reason: 'Required interview opening introducing QualifyAI and room guidelines',
+          reason: 'Required interview opening calibrated to requisition background and room guidelines',
           based_on_question_id: null,
-          options: [],
           metadata: {
-            type: 'BEHAVIORAL',
-            expected_concepts: ['Professional background', 'Project architecture', 'Technical experience'],
+            type: initialType,
+            expected_concepts: ['Professional background', 'Role competencies', job?.ask_about_projects !== false ? 'Relevant project experience' : 'Relevant domain experience'],
             rubric_focus: 'Professional background & Introduction',
             room_rules: [
               '1 question at a time with real-time adaptive follow-ups',
               'Speak aloud or type your answer in the workspace',
-              'Click Submit Response when done, or pause for 5-7s to auto-submit',
+              'Click Submit Response when finished with your answer',
               'Assessment runs in monitored fullscreen mode',
             ],
           },
-        }
+        }, initialType)
       } else {
       const initialDecision = await realtimeQuestionGenerator.decideNextAction({
         job,
@@ -390,6 +556,25 @@ export const interviewEngineService = {
 
       if (sessError) throw new Error(`Failed to create interview session: ${sessError.message}`)
       session = newSession
+    }
+
+    // Requirement 7: Asynchronously start dynamic question pool generation in background at room entry
+    try {
+      const permittedTypes = resolvePermittedQuestionTypes(job)
+      questionPoolService.startBackgroundPoolGeneration({
+        sessionId: session.id,
+        interviewId: interview.id,
+        job,
+        candidate,
+        rubricCriteria: criteriaList,
+        durationMinutes: configuredDuration,
+        allowedQuestionTypes: permittedTypes.allPermittedTypes,
+        targetDifficulty: job?.target_difficulty || 'MEDIUM',
+      }).catch((err) => {
+        console.warn(`[InterviewEngine] Background pool generation warning: ${err.message}`)
+      })
+    } catch (poolErr) {
+      console.warn(`[InterviewEngine] Background pool start failed: ${poolErr.message}`)
     }
 
     if (currentTranscripts.length === 0) {
@@ -597,7 +782,7 @@ export const interviewEngineService = {
     const spoken = nextQuestion.spoken_lead_in || nextQuestion.question_text
     await supabase.from('transcripts').insert({ interview_id: targetInterview.id, speaker: 'AI', content: spoken, sequence: (lastTranscript?.[0]?.sequence || 0) + 1 })
     const questionEvent = { type: 'ai_question', sessionId: session.id, eventId: `${session.id}-${nextQuestion.id}`, sequence: eventSequence + 1, questionSequence: nextSequence, question: nextQuestion, aiMessage: spoken, remainingSeconds: timeCheck.remainingSeconds, speakAloud: true, timestamp: new Date().toISOString() }
-    return { isCompleted: false, sequence: nextSequence, nextQuestion, remainingSeconds: timeCheck.remainingSeconds, coverageMatrix: meta.coverage_matrix || [], session: { id: session.id, interview_id: targetInterview.id, session_metadata: updatedMeta } }
+    return { isCompleted: false, sequence: nextSequence, nextQuestion, remainingSeconds: timeCheck.remainingSeconds, coverageMatrix: meta.coverage_matrix || [], session: { id: session.id, interview_id: targetInterview.id, session_metadata: updatedMeta, job, candidate } }
   },
 
   async startWrapUp({ interviewId, token }) {
@@ -612,32 +797,67 @@ export const interviewEngineService = {
     const { data: session } = await supabase.from('interview_sessions').select('*').eq('interview_id', interview.id).maybeSingle()
     if (!session) throw new Error('Interview session not found.')
     const meta = session.session_metadata || {}
-    if (meta.wrap_up_started) return { sequence: meta.current_question_sequence, nextQuestion: meta.current_question, remainingSeconds: adaptivePolicyService.validateTimeConstraints({ startedAt: meta.started_at, durationMinutes: meta.duration_minutes || 20, endsAt: meta.ends_at }).remainingSeconds, coverageMatrix: meta.coverage_matrix || [], isDuplicate: true }
+
     const timeCheck = adaptivePolicyService.validateTimeConstraints({ startedAt: meta.started_at, durationMinutes: meta.duration_minutes || 20, endsAt: meta.ends_at })
     if (timeCheck.isExpired) return this._concludeSessionOnTimeLimit({ interview, session, candidate, job, meta, token })
-    if (timeCheck.remainingSeconds > 120) return { isCompleted: false, skipped: true, remainingSeconds: timeCheck.remainingSeconds }
-    const currentQuestion = meta.current_question
-    const nextSequence = (Number(meta.current_question_sequence) || 0) + 1
-    const decision = await realtimeQuestionGenerator.decideNextAction({
-      job, candidate, rubricCriteria: rubric.rubric_criteria || [], coverageMap: meta.coverage_matrix || [],
-      currentQuestion, answer: null, answerAnalysis: null, turnHistory: meta.turn_history || [],
-      sequence: nextSequence, timeRemainingSeconds: timeCheck.remainingSeconds,
-      interviewDurationMinutes: meta.duration_minutes, askedQuestions: meta.asked_questions || [], wrapUpMode: true,
-    })
-    if (decision.action === 'END_INTERVIEW') return this._concludeSessionEarly({ interview, session, candidate, job, meta: { ...meta, wrap_up_started: true }, token, reason: decision.completionReason })
-    const nextQuestion = this._formatInterviewQuestion(decision, nextSequence, currentQuestion, session.id)
+
+    // Strict Assessment Deadline: assessment is conducted until final 60 seconds (1 minute reserved exclusively for feedback)
+    if (timeCheck.remainingSeconds > 60) {
+      return {
+        isCompleted: false,
+        skipped: true,
+        interviewPhase: 'ASSESSMENT',
+        remainingSeconds: timeCheck.remainingSeconds,
+      }
+    }
+
+    if (meta.wrap_up_started || meta.interview_phase === 'FEEDBACK') {
+      return {
+        isCompleted: false,
+        interviewPhase: 'FEEDBACK',
+        sequence: meta.current_question_sequence || 0,
+        feedbackInvitation: meta.feedback_invitation || `Thank you for completing the technical assessment. We have reserved our final minute for candidate feedback. Please rate your experience and share any feedback.`,
+        nextQuestion: null,
+        remainingSeconds: timeCheck.remainingSeconds,
+        coverageMatrix: meta.coverage_matrix || [],
+        isDuplicate: true,
+        session: { id: session.id, interview_id: interview.id, session_metadata: meta, job, candidate },
+      }
+    }
+
+    const feedbackInvitation = `Thank you, ${candidate.full_name}. That concludes your assessment for the ${job.title} role. We have reserved our final minute for candidate feedback. Please take a moment to rate your experience and share any feedback.`
     const eventSequence = (Number(meta.event_sequence) || 1) + 1
     const updatedMeta = {
-      ...meta, wrap_up_started: true, current_question_sequence: nextSequence, current_question_id: nextQuestion.id,
-      current_question: nextQuestion, event_sequence: eventSequence + 1,
-      asked_questions: [...(meta.asked_questions || []), { id: nextQuestion.id, text: nextQuestion.question_text, type: nextQuestion.type, skill: nextQuestion.skill, topic: nextQuestion.topic, sequence: nextSequence }],
+      ...meta,
+      wrap_up_started: true,
+      interview_phase: 'FEEDBACK',
+      event_sequence: eventSequence + 1,
+      feedback_invitation: feedbackInvitation,
     }
-    await supabase.from('interview_sessions').update({ session_metadata: updatedMeta, current_question_index: nextSequence, conversation_state: 'AI_SPEAKING' }).eq('id', session.id)
+
+    await supabase.from('interview_sessions').update({
+      session_metadata: updatedMeta,
+      conversation_state: 'AI_SPEAKING',
+    }).eq('id', session.id)
+
     const { data: lastTranscript } = await supabase.from('transcripts').select('sequence').eq('interview_id', interview.id).order('sequence', { ascending: false }).limit(1)
-    const spoken = nextQuestion.spoken_lead_in || nextQuestion.question_text
-    await supabase.from('transcripts').insert({ interview_id: interview.id, speaker: 'AI', content: spoken, sequence: (lastTranscript?.[0]?.sequence || 0) + 1 })
-    const packet = { type: 'ai_question', sessionId: session.id, eventId: `${session.id}-${nextQuestion.id}`, sequence: eventSequence + 1, questionSequence: nextSequence, question: nextQuestion, aiMessage: spoken, remainingSeconds: timeCheck.remainingSeconds, speakAloud: true, timestamp: new Date().toISOString() }
-    return { isCompleted: false, sequence: nextSequence, nextQuestion, remainingSeconds: timeCheck.remainingSeconds, coverageMatrix: meta.coverage_matrix || [], session: { id: session.id, interview_id: interview.id, session_metadata: updatedMeta } }
+    await supabase.from('transcripts').insert({
+      interview_id: interview.id,
+      speaker: 'AI',
+      content: feedbackInvitation,
+      sequence: (lastTranscript?.[0]?.sequence || 0) + 1,
+    })
+
+    return {
+      isCompleted: false,
+      interviewPhase: 'FEEDBACK',
+      sequence: meta.current_question_sequence || 0,
+      feedbackInvitation,
+      nextQuestion: null,
+      remainingSeconds: timeCheck.remainingSeconds,
+      coverageMatrix: meta.coverage_matrix || [],
+      session: { id: session.id, interview_id: interview.id, session_metadata: updatedMeta, job, candidate },
+    }
   },
 
   async _processCandidateTurn({
@@ -647,7 +867,9 @@ export const interviewEngineService = {
     questionSequence,
     questionId,
     inputMethod = 'VOICE',
+    structuredAnswer = null,
   }) {
+    const turnStartTime = Date.now()
     const supabase = getServiceSupabaseClient()
     const { job, candidate, rubric } = await this._resolveTokenContext(token)
 
@@ -726,6 +948,8 @@ export const interviewEngineService = {
           interview_id: interview.id,
           status: interview.status,
           session_metadata: meta,
+          job,
+          candidate,
         },
         coverageMatrix: meta.coverage_matrix,
       }
@@ -784,6 +1008,8 @@ export const interviewEngineService = {
           interview_id: interview.id,
           status: interview.status,
           session_metadata: meta,
+          job,
+          candidate,
         },
         coverageMatrix: meta.coverage_matrix,
       }
@@ -797,6 +1023,7 @@ export const interviewEngineService = {
     const answerId = committedAnswer?.answerId || randomUUID()
 
     // 5. Append candidate answer to transcripts
+    const commitStartTime = Date.now()
     const { data: latestTranscripts } = await supabase
       .from('transcripts')
       .select('sequence, speaker, content')
@@ -823,6 +1050,7 @@ export const interviewEngineService = {
       answerText,
       inputMode: inputMethod,
       committedAt: new Date().toISOString(),
+      structuredAnswer,
     })
     if (!recoveringCommittedAnswer) {
       meta = {
@@ -845,6 +1073,7 @@ export const interviewEngineService = {
         throw conflict
       }
     }
+    const commitMs = Date.now() - commitStartTime
 
     // 6. Active Question & Criterion Resolution
     const currentQuestion = meta.current_question
@@ -853,27 +1082,183 @@ export const interviewEngineService = {
       (c) => c.id === currentQuestion.rubric_criterion_id
     )
 
-    // 7. Answer Analysis
-    const analysis = await answerAnalyzer.analyzeAnswer({
-      question: currentQuestion,
-      rubricCriterion: currentCriterion,
-      candidateAnswer: answerText,
-      previousContext: meta.turn_history || [],
+    const nextQuestionSequence = currentSeq + 1
+    const decisionTime = adaptivePolicyService.validateTimeConstraints({
+      startedAt: meta.started_at,
+      durationMinutes: meta.duration_minutes,
+      endsAt: meta.ends_at,
     })
+    if (decisionTime.isExpired) {
+      return this._concludeSessionOnTimeLimit({ interview, session, candidate, job, meta, token })
+    }
 
-    // 8. Policy Guidance Calculation (evidence tracking, adaptive difficulty, topic priority)
-    const policyGuidance = adaptivePolicyService.computePolicyGuidance({
+    // 7. Unified Turn Evaluation & Next Action (single-call optimization, eliminating ~3-6s LLM latency)
+    const evalStartTime = Date.now()
+    let analysis = null
+    let decision = null
+    let policyGuidance = null
+
+    const permitted = resolvePermittedQuestionTypes(job)
+    const preliminaryGuidance = adaptivePolicyService.computePolicyGuidance({
       coverageMatrix: meta.coverage_matrix || adaptivePolicyService.initializeCoverageMatrix(rubric.rubric_criteria || []),
       currentCriterionId: currentCriterion?.id,
-      answerAnalysis: analysis,
+      answerAnalysis: {},
       turnSequence: activeAnsweringSeq,
       candidateAnswer: answerText,
       jobTitle: job?.title,
       askedQuestions: meta.asked_questions || [],
+      baselineDifficulty: job?.target_difficulty || 'MEDIUM',
+      allowedTypes: permitted.allPermittedTypes,
+      askAboutProjects: job?.ask_about_projects !== false,
+      backgroundType: job?.background_type || 'TECHNICAL',
+      timeRemainingSeconds: decisionTime.remainingSeconds,
+      durationMinutes: meta.duration_minutes || 20,
     })
 
-    // 9. Autonomous AI Question Synthesis (Gemini AI Interviewer)
-    const nextQuestionSequence = currentSeq + 1
+    // 7.1 Authoritative Deterministic Evaluation for Objective Questions
+    const deterministicResult = evaluateAnswerDeterministically(currentQuestion, answerText, structuredAnswer)
+    if (deterministicResult) {
+      analysis = {
+        correctness: deterministicResult.correctness,
+        relevance: deterministicResult.relevance,
+        depth: deterministicResult.depth,
+        concepts_detected: deterministicResult.concepts_detected,
+        missing_concepts: deterministicResult.missing_concepts,
+        confidence: 1.0,
+        skill_estimate: deterministicResult.skill_estimate,
+        feedback_summary: deterministicResult.feedback_summary,
+        strengths: deterministicResult.concepts_detected,
+        weaknesses: deterministicResult.missing_concepts,
+        isDeterministic: true,
+      }
+      policyGuidance = adaptivePolicyService.computePolicyGuidance({
+        coverageMatrix: meta.coverage_matrix || adaptivePolicyService.initializeCoverageMatrix(rubric.rubric_criteria || []),
+        currentCriterionId: currentCriterion?.id,
+        answerAnalysis: analysis,
+        turnSequence: activeAnsweringSeq,
+        candidateAnswer: answerText,
+        jobTitle: job?.title,
+        askedQuestions: meta.asked_questions || [],
+        baselineDifficulty: job?.target_difficulty || 'MEDIUM',
+        allowedTypes: permitted.allPermittedTypes,
+        askAboutProjects: job?.ask_about_projects !== false,
+        backgroundType: job?.background_type || 'TECHNICAL',
+        timeRemainingSeconds: decisionTime.remainingSeconds,
+        durationMinutes: meta.duration_minutes || 20,
+      })
+      decision = await realtimeQuestionGenerator.decideNextAction({
+        job,
+        candidate,
+        rubricCriteria: rubric.rubric_criteria || [],
+        coverageMap: policyGuidance.updatedMatrix,
+        currentQuestion,
+        answer: { text: answerText, structuredAnswer, questionId: currentQuestion?.id, questionSequence: currentSeq },
+        answerAnalysis: analysis,
+        policyGuidance,
+        turnHistory: meta.turn_history || [],
+        askedQuestions: meta.asked_questions || [],
+        sequence: nextQuestionSequence,
+        timeRemainingSeconds: decisionTime.remainingSeconds,
+        interviewDurationMinutes: meta.duration_minutes,
+        wrapUpMode: Boolean(meta.wrap_up_started),
+      })
+    } else {
+      try {
+        const unifiedResult = await realtimeQuestionGenerator.evaluateTurnAndDecideNextAction({
+          job,
+          candidate,
+          rubricCriteria: rubric.rubric_criteria || [],
+          currentCriterion,
+          coverageMap: meta.coverage_matrix || [],
+          currentQuestion,
+          candidateAnswer: answerText,
+          policyGuidance: preliminaryGuidance,
+          turnHistory: meta.turn_history || [],
+          askedQuestions: meta.asked_questions || [],
+          sequence: nextQuestionSequence,
+          timeRemainingSeconds: decisionTime.remainingSeconds,
+          interviewDurationMinutes: meta.duration_minutes,
+          wrapUpMode: Boolean(meta.wrap_up_started),
+        })
+        analysis = unifiedResult.analysis
+        decision = unifiedResult.decision
+        policyGuidance = adaptivePolicyService.computePolicyGuidance({
+          coverageMatrix: meta.coverage_matrix || adaptivePolicyService.initializeCoverageMatrix(rubric.rubric_criteria || []),
+          currentCriterionId: currentCriterion?.id,
+          answerAnalysis: analysis,
+          turnSequence: activeAnsweringSeq,
+          candidateAnswer: answerText,
+          jobTitle: job?.title,
+          askedQuestions: meta.asked_questions || [],
+          baselineDifficulty: job?.target_difficulty || 'MEDIUM',
+          allowedTypes: permitted.allPermittedTypes,
+          askAboutProjects: job?.ask_about_projects !== false,
+          backgroundType: job?.background_type || 'TECHNICAL',
+          timeRemainingSeconds: decisionTime.remainingSeconds,
+          durationMinutes: meta.duration_minutes || 20,
+        })
+      } catch (unifiedErr) {
+      console.warn('[InterviewEngine] Unified turn evaluation failed, falling back to sequential evaluation:', unifiedErr.message)
+      analysis = await answerAnalyzer.analyzeAnswer({
+        question: currentQuestion,
+        rubricCriterion: currentCriterion,
+        candidateAnswer: answerText,
+        previousContext: meta.turn_history || [],
+      })
+      policyGuidance = adaptivePolicyService.computePolicyGuidance({
+        coverageMatrix: meta.coverage_matrix || adaptivePolicyService.initializeCoverageMatrix(rubric.rubric_criteria || []),
+        currentCriterionId: currentCriterion?.id,
+        answerAnalysis: analysis,
+        turnSequence: activeAnsweringSeq,
+        candidateAnswer: answerText,
+        jobTitle: job?.title,
+        askedQuestions: meta.asked_questions || [],
+        baselineDifficulty: job?.target_difficulty || 'MEDIUM',
+        allowedTypes: permitted.allPermittedTypes,
+        askAboutProjects: job?.ask_about_projects !== false,
+        backgroundType: job?.background_type || 'TECHNICAL',
+        timeRemainingSeconds: decisionTime.remainingSeconds,
+        durationMinutes: meta.duration_minutes || 20,
+      })
+      const fallbackTurnRecord = {
+        turn_sequence: activeAnsweringSeq,
+        question_id: currentQuestion.id,
+        question_text: currentQuestion.question_text,
+        answer_id: answerId,
+        answer_text: answerText.trim(),
+        criterion_name: currentCriterion?.name || currentQuestion.skill || currentQuestion.topic || 'General Engineering',
+        answer_length: answerText.length,
+        input_method: inputMethod,
+        analysis,
+        timestamp: new Date().toISOString(),
+      }
+      decision = await realtimeQuestionGenerator.decideNextAction({
+        job,
+        candidate,
+        rubricCriteria: rubric.rubric_criteria || [],
+        coverageMap: policyGuidance.updatedMatrix,
+        policyGuidance,
+        currentQuestion,
+        answer: { id: answerId, text: answerText.trim(), questionId: currentQuestion.id, questionSequence: activeAnsweringSeq },
+        answerAnalysis: analysis,
+        turnHistory: [...(meta.turn_history || []), fallbackTurnRecord],
+        sequence: nextQuestionSequence,
+        timeRemainingSeconds: decisionTime.remainingSeconds,
+        interviewDurationMinutes: meta.duration_minutes,
+        askedQuestions: meta.asked_questions || [],
+        wrapUpMode: Boolean(meta.wrap_up_started),
+      })
+    }
+  }
+    const evalMs = Date.now() - evalStartTime
+    const totalTurnMs = Date.now() - turnStartTime
+    const turnTiming = {
+      answerCommitMs: commitMs,
+      decisionMs: evalMs,
+      totalTurnMs,
+    }
+    console.log(`[InterviewEngine Turn Timing] Answer Commit: ${turnTiming.answerCommitMs}ms | Decision & Next Q: ${turnTiming.decisionMs}ms | Total Turn: ${turnTiming.totalTurnMs}ms`)
+
     const turnRecord = {
       turn_sequence: activeAnsweringSeq,
       question_id: currentQuestion.id,
@@ -887,30 +1272,6 @@ export const interviewEngineService = {
       timestamp: new Date().toISOString(),
     }
     const updatedTurnHistory = [...(meta.turn_history || []), turnRecord]
-    const decisionTime = adaptivePolicyService.validateTimeConstraints({
-      startedAt: meta.started_at,
-      durationMinutes: meta.duration_minutes,
-      endsAt: meta.ends_at,
-    })
-    if (decisionTime.isExpired) {
-      return this._concludeSessionOnTimeLimit({ interview, session, candidate, job, meta, token })
-    }
-    const decision = await realtimeQuestionGenerator.decideNextAction({
-      job,
-      candidate,
-      rubricCriteria: rubric.rubric_criteria || [],
-      coverageMap: policyGuidance.updatedMatrix,
-      policyGuidance,
-      currentQuestion,
-      answer: { id: answerId, text: answerText.trim(), questionId: currentQuestion.id, questionSequence: activeAnsweringSeq },
-      answerAnalysis: analysis,
-      turnHistory: updatedTurnHistory,
-      sequence: nextQuestionSequence,
-      timeRemainingSeconds: decisionTime.remainingSeconds,
-      interviewDurationMinutes: meta.duration_minutes,
-      askedQuestions: meta.asked_questions || [],
-      wrapUpMode: Boolean(meta.wrap_up_started),
-    })
 
     const postDecisionTimeCheck = adaptivePolicyService.validateTimeConstraints({
       startedAt: meta.started_at,
@@ -923,10 +1284,127 @@ export const interviewEngineService = {
 
     const decisionEventSequence = (Number(meta.event_sequence) || 1) + 1
 
-    if (decision.action === 'END_INTERVIEW') {
-      return this._concludeSessionEarly({ interview, session, candidate, job, meta, token, reason: decision.completionReason })
+    // Strict Final-Minute Reservation: Assessment stops at the 60-second assessment deadline
+    if (postDecisionTimeCheck.remainingSeconds <= 60 || meta.wrap_up_started) {
+      const feedbackInvitation = `Thank you, ${candidate.full_name}. That concludes your assessment for the ${job.title} role. We have reserved our final minute for candidate feedback. Please take a moment to rate your experience and share any feedback.`
+      const updatedMetadata = {
+        ...meta,
+        interview_phase: 'FEEDBACK',
+        wrap_up_started: true,
+        answer_processing_state: undefined,
+        answer_processing_failed_at: undefined,
+        event_sequence: decisionEventSequence + 1,
+        coverage_matrix: policyGuidance.updatedMatrix,
+        answered_sequences: updatedAnsweredSequences,
+        turn_history: updatedTurnHistory,
+        feedback_invitation: feedbackInvitation,
+      }
+      await supabase.from('interview_sessions').update({
+        session_metadata: updatedMetadata,
+        conversation_state: 'AI_SPEAKING',
+      }).eq('id', session.id)
+
+      const { data: lastTranscript } = await supabase.from('transcripts').select('sequence').eq('interview_id', interview.id).order('sequence', { ascending: false }).limit(1)
+      await supabase.from('transcripts').insert({
+        interview_id: interview.id,
+        speaker: 'AI',
+        content: feedbackInvitation,
+        sequence: (lastTranscript?.[0]?.sequence || 0) + 1,
+      })
+
+      return {
+        isCompleted: false,
+        interviewPhase: 'FEEDBACK',
+        sequence: nextQuestionSequence,
+        feedbackInvitation,
+        nextQuestion: null,
+        remainingSeconds: postDecisionTimeCheck.remainingSeconds,
+        answerAnalysis: analysis,
+        policyGuidance,
+        timing: turnTiming,
+        session: {
+          id: session.id,
+          interview_id: interview.id,
+          status: interview.status,
+          session_metadata: updatedMetadata,
+          job,
+          candidate,
+        },
+        coverageMatrix: updatedMetadata.coverage_matrix,
+        transcripts: [],
+      }
     }
-    const dynamicQuestion = this._formatInterviewQuestion(decision, nextQuestionSequence, currentQuestion, session.id)
+
+    // 8. Foundational Strategy & Question Selection (Requirement 8)
+    const foundationalBg = resolveFoundationalBackground(job)
+    let dynamicQuestion = null
+
+    // Fetch freshest session metadata to get pre-generated question pool
+    let activePool = meta.question_pool || []
+    if (!activePool || activePool.length === 0) {
+      const { data: latestSess } = await supabase
+        .from('interview_sessions')
+        .select('session_metadata')
+        .eq('id', session.id)
+        .maybeSingle()
+      if (latestSess?.session_metadata?.question_pool) {
+        activePool = latestSess.session_metadata.question_pool
+        meta.question_pool = activePool
+        meta.pool_status = latestSess.session_metadata.pool_status
+      }
+    }
+
+    // Mark completed question as EVALUATED in pool
+    if (Array.isArray(activePool) && activePool.length > 0 && currentQuestion?.id) {
+      activePool = activePool.map((q) =>
+        q.id === currentQuestion.id ? { ...q, status: 'EVALUATED' } : q
+      )
+      meta.question_pool = activePool
+    }
+
+    // Check if technical follow-up is warranted (Requirement 8.2 & 8.3)
+    let isTechnicalFollowUpWarranted = false
+    if (foundationalBg === 'technical') {
+      const currentCriterionItem = (policyGuidance.updatedMatrix || []).find((c) =>
+        c.criterion_id === currentCriterion?.id || (c.name && currentCriterion?.name && c.name.toLowerCase() === currentCriterion.name.toLowerCase())
+      )
+      const currentAttempts = currentCriterionItem?.attempts || 1
+      const hasMissingConcepts = Boolean(analysis?.missing_concepts && analysis.missing_concepts.length > 0)
+      const needsDepth = analysis?.depth !== undefined && analysis.depth < 6
+      const partialScore = analysis?.correctness !== undefined && analysis.correctness < 0.75 && analysis.correctness > 0.1
+
+      isTechnicalFollowUpWarranted =
+        currentQuestion?.relationship !== 'FOLLOW_UP' &&
+        currentAttempts < 2 &&
+        (hasMissingConcepts || needsDepth || partialScore) &&
+        decisionTime.remainingSeconds > 120
+    }
+
+    // Strategy 1: Non-Technical (pool-first adaptive selection)
+    // Strategy 2: Technical (pool-first core questions unless adaptive follow-up is warranted)
+    if (!isTechnicalFollowUpWarranted && Array.isArray(activePool) && activePool.length > 0) {
+      const poolQ = questionPoolService.selectNextQuestionFromPool({
+        pool: activePool,
+        coverageMatrix: policyGuidance.updatedMatrix,
+        currentQuestion,
+        timeRemainingSeconds: postDecisionTimeCheck.remainingSeconds,
+        foundationalBackground: foundationalBg,
+      })
+
+      if (poolQ) {
+        dynamicQuestion = this._formatPoolQuestion(poolQ, nextQuestionSequence, session.id, analysis)
+        activePool = activePool.map((q) => (q.id === poolQ.id ? { ...q, status: 'ACTIVE' } : q))
+        meta.question_pool = activePool
+      }
+    }
+
+    // If technical follow-up is warranted OR pool has no matching question available:
+    if (!dynamicQuestion) {
+      if (decision?.action === 'END_INTERVIEW') {
+        return this._concludeSessionEarly({ interview, session, candidate, job, meta, token, reason: decision.completionReason })
+      }
+      dynamicQuestion = this._formatInterviewQuestion(decision, nextQuestionSequence, currentQuestion, session.id)
+    }
 
     // 10. Record turn in turn history
     const updatedAskedQuestions = [
@@ -952,6 +1430,8 @@ export const interviewEngineService = {
       asked_questions: updatedAskedQuestions,
       turn_history: updatedTurnHistory,
       difficulty_history: [...(meta.difficulty_history || []), dynamicQuestion.difficulty],
+      question_pool: activePool,
+      pool_status: meta.pool_status || 'READY',
     }
 
     await supabase
@@ -995,11 +1475,14 @@ export const interviewEngineService = {
       remainingSeconds: timeCheck.remainingSeconds,
       answerAnalysis: analysis,
       policyGuidance,
+      timing: turnTiming,
       session: {
         id: session.id,
         interview_id: interview.id,
         status: interview.status,
         session_metadata: updatedMetadata,
+        job,
+        candidate,
       },
       coverageMatrix: updatedMetadata.coverage_matrix,
       transcripts: [],
@@ -1071,6 +1554,8 @@ export const interviewEngineService = {
         interview_id: interview.id,
         status: 'COMPLETED',
         session_metadata: { ...completionMeta, event_sequence: completionEventSequence },
+        job,
+        candidate,
       },
       coverageMatrix: completionMeta.coverage_matrix || [],
     }
@@ -1101,7 +1586,7 @@ export const interviewEngineService = {
       remainingSeconds: adaptivePolicyService.validateTimeConstraints({
         startedAt: meta.started_at, durationMinutes: meta.duration_minutes, endsAt: meta.ends_at,
       }).remainingSeconds,
-      session: { id: session.id, interview_id: interview.id, status: 'COMPLETED', session_metadata: meta },
+      session: { id: session.id, interview_id: interview.id, status: 'COMPLETED', session_metadata: meta, job, candidate },
       coverageMatrix: meta.coverage_matrix || [],
     }
   },
@@ -1313,4 +1798,5 @@ export const interviewEngineService = {
       transcripts: transcripts || [],
     }
   },
+  getBackgroundWelcome,
 }

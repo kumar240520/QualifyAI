@@ -38,7 +38,7 @@ export function parseInterviewDurationMinutes(...values) {
   return 20
 }
 
-export function createAnswerCommit({ sessionId, answerId, question, answerText, inputMode, committedAt }) {
+export function createAnswerCommit({ sessionId, answerId, question, answerText, inputMode, committedAt, structuredAnswer = null }) {
   return {
     sessionId,
     answerId,
@@ -47,6 +47,7 @@ export function createAnswerCommit({ sessionId, answerId, question, answerText, 
     answerText: String(answerText).trim(),
     inputMode,
     committedAt,
+    ...(structuredAnswer ? { structuredAnswer } : {}),
   }
 }
 

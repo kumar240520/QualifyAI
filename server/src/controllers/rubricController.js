@@ -164,6 +164,90 @@ export const rubricController = {
   },
 
   /**
+   * PUT /api/jobs/:id/opening-question
+   */
+  async updateOpeningQuestion(req, res, next) {
+    try {
+      const jobId = req.params.id
+      const organizationId = req.organizationId
+      const userToken = req.token || req.accessToken
+      const { opening_question, openingQuestion } = req.body
+      const questionText = opening_question || openingQuestion
+
+      const result = await rubricService.updateOpeningQuestion({
+        jobId,
+        organizationId,
+        openingQuestion: questionText,
+        userToken,
+      })
+
+      return res.status(200).json({
+        success: true,
+        message: 'Opening question updated.',
+        data: result,
+      })
+    } catch (err) {
+      next(err)
+    }
+  },
+
+  /**
+   * PUT /api/jobs/:id/difficulty
+   */
+  async updateDifficulty(req, res, next) {
+    try {
+      const jobId = req.params.id
+      const organizationId = req.organizationId
+      const userToken = req.token || req.accessToken
+      const { target_difficulty, targetDifficulty, difficulty } = req.body
+      const diffLevel = target_difficulty || targetDifficulty || difficulty
+
+      const result = await rubricService.updateDifficulty({
+        jobId,
+        organizationId,
+        difficulty: diffLevel,
+        userToken,
+      })
+
+      return res.status(200).json({
+        success: true,
+        message: 'Target difficulty updated.',
+        data: result,
+      })
+    } catch (err) {
+      next(err)
+    }
+  },
+
+  /**
+   * PUT /api/jobs/:id/questions/:questionId
+   */
+  async updateQuestion(req, res, next) {
+    try {
+      const jobId = req.params.id
+      const questionId = req.params.questionId
+      const organizationId = req.organizationId
+      const userToken = req.token || req.accessToken
+
+      const updated = await rubricService.updateQuestion({
+        jobId,
+        organizationId,
+        questionId,
+        questionData: req.body,
+        userToken,
+      })
+
+      return res.status(200).json({
+        success: true,
+        message: 'Question updated.',
+        data: updated,
+      })
+    } catch (err) {
+      next(err)
+    }
+  },
+
+  /**
    * DELETE /api/jobs/:id/questions/:questionId
    */
   async deleteQuestion(req, res, next) {

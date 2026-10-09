@@ -33,30 +33,64 @@ export const adaptivePolicyService = {
   updateCoverageMatrix(matrix = [], criterionId, analysis = {}) {
     if (!Array.isArray(matrix)) return []
 
-    return matrix.map((item) => {
-      if (item.criterion_id !== criterionId) return item
+    let targetId = criterionId
+    let targetAnalysis = analysis
 
+    if (criterionId && typeof criterionId === 'object' && !Array.isArray(criterionId)) {
+      targetId = criterionId.criterionId || criterionId.criterion_id || criterionId.criterionName || criterionId.name
+      targetAnalysis = criterionId.analysis || criterionId
+    }
+
+    const cleanTarget = String(targetId || '').trim().toLowerCase()
+
+    return matrix.map((item) => {
+      const cleanItemName = String(item.name || '').trim().toLowerCase()
+      const cleanItemId = String(item.criterion_id || item.id || '').trim().toLowerCase()
+      const matches = item.criterion_id === targetId ||
+                      item.id === targetId ||
+                      item.name === targetId ||
+                      (cleanTarget && (cleanItemName === cleanTarget || cleanItemId === cleanTarget || cleanItemName.includes(cleanTarget) || cleanTarget.includes(cleanItemName)))
+
+      if (!matches) return item
+
+      const isNoResponse = Boolean(
+        targetAnalysis?.noResponse ||
+        targetAnalysis?.isNoResponse ||
+        targetAnalysis?.skipped ||
+        targetAnalysis?.unanswered
+      )
+
+      // If turn was empty, silent, or skipped: do NOT increment evaluated attempts or false scores
+      if (isNoResponse || !targetAnalysis || Object.keys(targetAnalysis).length === 0) {
+        return {
+          ...item,
+          status: item.attempts > 0 ? (item.status || 'PARTIALLY_ASSESSED') : 'IN_PROGRESS',
+        }
+      }
+
+      const score = Number(targetAnalysis.correctness) || Number(targetAnalysis.score) || 5
       const newAttempts = (item.attempts || 0) + 1
-      const score = Number(analysis.correctness) || Number(analysis.score) || 5
       const newScores = [...(item.scores || []), score]
       const avg = Math.round((newScores.reduce((a, b) => a + b, 0) / newScores.length) * 10) / 10
       const evidence = [...new Set([
         ...(item.evidence || []),
-        ...(analysis.concepts_detected || []),
-        ...(analysis.strengths || []),
+        ...(targetAnalysis.concepts_detected || []),
+        ...(targetAnalysis.strengths || []),
       ])]
       const missing = [...new Set([
-        ...(analysis.missing_concepts || []),
-        ...(analysis.skills_not_demonstrated || []),
+        ...(targetAnalysis.missing_concepts || []),
+        ...(targetAnalysis.skills_not_demonstrated || []),
       ])]
-      const topics = [...new Set([...(item.topics || []), ...(analysis.topics_mentioned || [])])]
+      const topics = [...new Set([...(item.topics || []), ...(targetAnalysis.topics_mentioned || [])])]
 
-      let status = 'IN_EVALUATION'
-      const depth = Number(analysis.depth) || 5
+      let status = 'PARTIALLY_ASSESSED'
+      const depth = Number(targetAnalysis.depth) || 5
       if (avg >= 8 && depth >= 7) {
         status = 'MASTERY_PROVEN'
-      } else if (newAttempts >= 2 || (newAttempts >= 1 && avg >= 6)) {
+      } else if ((avg >= 5 && evidence.length > 0) || (newAttempts >= 2 && avg >= 4.5) || (newAttempts >= 1 && avg >= 5.0)) {
         status = 'SUFFICIENTLY_EVALUATED'
+      } else if (newAttempts >= 1) {
+        status = 'PARTIALLY_ASSESSED'
       }
 
       return {
@@ -69,6 +103,7 @@ export const adaptivePolicyService = {
         missing,
         topics,
         status,
+        assessed: status === 'MASTERY_PROVEN' || status === 'SUFFICIENTLY_EVALUATED' || (newAttempts >= 1 && avg >= 4.0),
       }
     })
   },
@@ -85,9 +120,9 @@ export const adaptivePolicyService = {
       const statusIcon =
         c.status === 'MASTERY_PROVEN'
           ? '✓ [Mastery Proven]'
-          : c.status === 'SUFFICIENTLY_EVALUATED'
-          ? '✓ [Sufficient Evidence]'
-          : c.status === 'IN_EVALUATION'
+          : c.status === 'SUFFICIENTLY_EVALUATED' || c.status === 'ASSESSED'
+          ? '✓ [Sufficient Evidence / Assessed]'
+          : c.status === 'PARTIALLY_ASSESSED' || c.status === 'IN_EVALUATION'
           ? '~ [In Evaluation - Partial]'
           : '? [Unassessed]'
       const scoreStr = c.attempts > 0 ? `(Avg: ${c.average_score}/10 over ${c.attempts} probe)` : ''
@@ -100,7 +135,7 @@ export const adaptivePolicyService = {
   /**
    * Validate session time constraints
    */
-  validateTimeConstraints({ startedAt, durationMinutes = 20, endsAt = null }) {
+  validateTimeConstraints({ startedAt, durationMinutes = 20, endsAt = null, overrideRemainingSeconds }) {
     const startTime = startedAt ? new Date(startedAt).getTime() : Date.now()
     const endTime = endsAt
       ? new Date(endsAt).getTime()
@@ -108,7 +143,9 @@ export const adaptivePolicyService = {
 
     const now = Date.now()
     const elapsedSeconds = Math.max(0, Math.round((now - startTime) / 1000))
-    const remainingSeconds = Math.max(0, Math.round((endTime - now) / 1000))
+    const remainingSeconds = overrideRemainingSeconds !== undefined && overrideRemainingSeconds !== null
+      ? Number(overrideRemainingSeconds)
+      : Math.max(0, Math.round((endTime - now) / 1000))
 
     return {
       startedAt: new Date(startTime).toISOString(),
@@ -123,61 +160,80 @@ export const adaptivePolicyService = {
   },
 
   /**
-   * Difficulty dynamically scales between EASY, MEDIUM, and HARD based on candidate performance:
-   * - Starting difficulty: MEDIUM
-   * - If last score >= 8/10 and rolling average >= 7.5/10 -> Escalate to HARD
-   * - If last score <= 4/10 and rolling average <= 4.5/10 -> De-escalate to EASY
-   * - Otherwise -> Maintain MEDIUM
+   * Recruiter-Controlled Difficulty:
+   * The recruiter alone decides the interview difficulty.
+   * The AI must not autonomously increase or decrease it based on candidate performance.
    */
-  calculateDifficulty(scores = []) {
-    if (!scores || scores.length === 0) return 'MEDIUM'
-    const lastScore = scores[scores.length - 1]
-    const avg = scores.reduce((a, b) => a + b, 0) / scores.length
-    if (lastScore >= 8 && avg >= 7.5) return 'HARD'
-    if (lastScore <= 4 && avg <= 4.5) return 'EASY'
-    return 'MEDIUM'
+  calculateDifficulty(scoresOrBaseline = 'MEDIUM', baselineDifficulty = 'MEDIUM') {
+    let raw = 'MEDIUM'
+    if (typeof scoresOrBaseline === 'string') {
+      raw = scoresOrBaseline
+    } else if (typeof baselineDifficulty === 'string') {
+      raw = baselineDifficulty
+    }
+    const base = String(raw).toUpperCase()
+    return ['EASY', 'MEDIUM', 'HARD'].includes(base) ? base : 'MEDIUM'
   },
 
   /**
-   * Dynamically selects a varied, non-monotonous question type.
-   * Prevents consecutive DESCRIPTIVE essay questions so candidates do not experience cognitive burden or fatigue.
+   * Dynamically selects a varied, non-monotonous question type strictly from
+   * the recruiter-permitted question types (allowedTypes), tailored to the target pillar competency.
    */
-  computeRecommendedQuestionType(askedQuestions = [], turnSequence = 0) {
-    const recent = Array.isArray(askedQuestions) ? askedQuestions.slice(-4) : []
+  computeRecommendedQuestionType(askedQuestions = [], turnSequence = 0, allowedTypes = [], targetCriterion = null) {
+    const validAllowed = Array.isArray(allowedTypes) && allowedTypes.length > 0
+      ? allowedTypes.map((t) => String(t).toUpperCase().replace(/\s+/g, '_'))
+      : ['SHORT_ANSWER', 'DESCRIPTIVE', 'MULTIPLE_CHOICE', 'SELECT_MOST_APPROPRIATE']
+
+    if (validAllowed.length === 1) {
+      return validAllowed[0]
+    }
+
+    const recent = Array.isArray(askedQuestions) ? askedQuestions.slice(-3) : []
     const lastType = recent.length > 0
       ? String(recent[recent.length - 1]?.type || '').toUpperCase()
-      : 'BEHAVIORAL'
+      : ''
 
-    // Interactive, engaging types that reduce cognitive burden
-    const interactivePool = [
-      'MULTIPLE_CHOICE',
-      'SCENARIO',
-      'CODE_OUTPUT',
-      'SHORT_ANSWER',
-      'TRUE_FALSE',
-      'CODE_WRITING',
-      'SQL',
-    ]
+    // Pillar-specific affinity matching
+    const criterionText = `${targetCriterion?.name || ''} ${targetCriterion?.description || ''}`.toLowerCase()
+    let preferredPool = []
 
-    // If previous question was DESCRIPTIVE or BEHAVIORAL, strictly exclude DESCRIPTIVE
-    const available = (lastType === 'DESCRIPTIVE' || lastType === 'BEHAVIORAL')
-      ? interactivePool
-      : [...interactivePool, 'DESCRIPTIVE']
+    if (/code|programming|implement|syntax|algorithm|data struct|backend|function/i.test(criterionText)) {
+      preferredPool = validAllowed.filter((t) =>
+        ['CODING_CHALLENGE', 'CODE_WRITING', 'DEBUGGING', 'COMPLETE_THE_CODE', 'PREDICT_CODE_OUTPUT', 'CODE_OUTPUT'].includes(t)
+      )
+    } else if (/math|aptitude|quant|calculat|metric|statist|probability|complexity/i.test(criterionText)) {
+      preferredPool = validAllowed.filter((t) =>
+        ['NUMERICAL_APTITUDE', 'MULTIPLE_CHOICE', 'MULTI_SELECT', 'SLIDER_SCALE'].includes(t)
+      )
+    } else if (/flow|order|pipeline|deploy|stage|sequence|lifecycle|step/i.test(criterionText)) {
+      preferredPool = validAllowed.filter((t) =>
+        ['ARRANGE_ORDER', 'SELECT_MOST_APPROPRIATE', 'SCENARIO'].includes(t)
+      )
+    } else if (/pair|concept|term|protocol|associat|match/i.test(criterionText)) {
+      preferredPool = validAllowed.filter((t) =>
+        ['MATCHING_PAIRS', 'FILL_IN_THE_BLANK', 'TRUE_FALSE'].includes(t)
+      )
+    } else if (/trade-off|priority|scale|compromise|incident|management|leadership/i.test(criterionText)) {
+      preferredPool = validAllowed.filter((t) =>
+        ['SELECT_MOST_APPROPRIATE', 'SCENARIO', 'SLIDER_SCALE', 'DESCRIPTIVE'].includes(t)
+      )
+    }
 
-    // Filter out the immediate last type to guarantee non-monotonous variety across turns
-    const nonRepeating = available.filter((t) => t !== lastType)
-    const selectionPool = nonRepeating.length > 0 ? nonRepeating : interactivePool
+    // Filter by affinity pool if matches exist, otherwise use full allowed set
+    const candidatePool = preferredPool.length > 0 ? preferredPool : validAllowed
+
+    // Anti-monotony: Filter out the immediately preceding question type if alternatives exist
+    const nonRepeating = candidatePool.filter((t) => t !== lastType)
+    const selectionPool = nonRepeating.length > 0 ? nonRepeating : (validAllowed.filter((t) => t !== lastType).length > 0 ? validAllowed.filter((t) => t !== lastType) : validAllowed)
 
     const randomIndex = Math.floor(Math.random() * selectionPool.length)
     return selectionPool[randomIndex]
   },
 
   /**
-   * Adaptive Decision Controller & Active Listening Policy Engine
-   * Evaluates evidence, candidate statements, missing concepts, and coverage gaps to determine:
-   * 1. FOLLOW_UP: Probe missing concepts, unverified claims, or project details
-   * 2. DEEPEN: Escalate technical depth when the candidate demonstrated strong competency
-   * 3. SWITCH_TOPIC: Transition to next unassessed rubric pillar once current is sufficiently proven
+   * Adaptive Decision Controller & Pillar-Aware Interview Policy Engine
+   * Evaluates evidence, candidate statements, missing concepts, and coverage gaps.
+   * Guarantees all configured rubric pillars receive meaningful assessment within the available time.
    */
   computeAdaptiveStep({
     coverageMatrix = [],
@@ -187,7 +243,18 @@ export const adaptivePolicyService = {
     candidateAnswer = '',
     jobTitle = '',
     askedQuestions = [],
+    baselineDifficulty = 'MEDIUM',
+    allowedTypes = [],
+    allowedQuestionTypes = [],
+    askAboutProjects = true,
+    backgroundType = 'TECHNICAL',
+    timeRemainingSeconds = 0,
+    durationMinutes = 20,
   }) {
+    const effectiveAllowedTypes = Array.isArray(allowedTypes) && allowedTypes.length > 0
+      ? allowedTypes
+      : (Array.isArray(allowedQuestionTypes) && allowedQuestionTypes.length > 0 ? allowedQuestionTypes : [])
+
     const updatedMatrix = this.updateCoverageMatrix(
       coverageMatrix,
       currentCriterionId,
@@ -196,33 +263,50 @@ export const adaptivePolicyService = {
 
     const currentCriterion = updatedMatrix.find((c) => c.criterion_id === currentCriterionId)
     const allScores = updatedMatrix.flatMap((c) => c.scores || [])
-    const targetDifficulty = this.calculateDifficulty(allScores)
-    const recommendedQuestionType = this.computeRecommendedQuestionType(askedQuestions, turnSequence)
+    const targetDifficulty = this.calculateDifficulty(allScores, baselineDifficulty)
 
     const unassessed = updatedMatrix.filter((c) => c.status === 'UNASSESSED')
-    const inEvaluation = updatedMatrix.filter((c) => c.status === 'IN_EVALUATION')
+    const inEvaluation = updatedMatrix.filter((c) => c.status === 'IN_EVALUATION' || c.status === 'PARTIALLY_ASSESSED' || c.status === 'IN_PROGRESS')
     const allSufficient = unassessed.length === 0 && inEvaluation.length === 0
+
+    // Time budget calculation: Reserve the final 60 seconds strictly for candidate feedback
+    const assessmentRemainingSeconds = Math.max(0, timeRemainingSeconds - 60)
+    const estimatedTurnsRemaining = Math.max(1, Math.floor(assessmentRemainingSeconds / 75))
 
     let recommendedAction = 'SWITCH_TOPIC'
     let targetCriterion = null
     let reason = ''
     let activeListeningGuidance = ''
 
-    // Case 1: Turn 0 (Introduction / Project Overview Turn without pre-assigned criterion)
+    // Case 1: Turn 0 (Introductory Turn without pre-assigned criterion)
     if (!currentCriterionId || turnSequence === 0) {
-      // Connect candidate's stated background/projects directly to the top-priority rubric pillar
       const sortedCriteria = [...updatedMatrix].sort((a, b) => (b.weight || 3) - (a.weight || 3))
       targetCriterion = sortedCriteria[0] || null
       recommendedAction = 'FOLLOW_UP'
-      reason = 'Candidate completed introductory turn. Formulate a grounded follow-up exploring their mentioned projects and tie it directly to the primary technical pillar.'
-      activeListeningGuidance = 'Acknowledge the specific projects, technologies, or architectures the candidate mentioned in their introduction. Then bridge directly to your first core technical evaluation.'
+      if (askAboutProjects) {
+        reason = 'Candidate completed introductory turn. Formulate a grounded follow-up exploring their mentioned projects and experience, tying it to the primary competency pillar.'
+        activeListeningGuidance = 'Acknowledge specific projects and technologies mentioned, then bridge directly to evaluating core competencies.'
+      } else {
+        reason = 'Candidate completed introductory turn. Formulate a grounded follow-up connecting their domain experience directly to the primary competency pillar.'
+        activeListeningGuidance = 'Acknowledge professional background, then bridge directly to assessing core competencies.'
+      }
     }
-    // Case 2: Candidate had missing concepts or partial depth on current pillar -> FOLLOW_UP probe
+    // Case 2: Unassessed pillars remain and time is constrained OR current pillar already had a probe
+    else if (unassessed.length > 0 && (currentCriterion?.attempts >= 2 || unassessed.length >= estimatedTurnsRemaining || (currentCriterion?.attempts >= 1 && (Number(answerAnalysis.depth) >= 5 || !answerAnalysis.missing_concepts?.length)))) {
+      // Prioritize highest weight unassessed pillar to ensure complete multi-pillar coverage
+      const sortedUnassessed = [...unassessed].sort((a, b) => (b.weight || 3) - (a.weight || 3))
+      targetCriterion = sortedUnassessed[0]
+      recommendedAction = 'SWITCH_TOPIC'
+      reason = `Balanced Pillar Coverage Policy: transitioning from "${currentCriterion?.name || 'Previous Topic'}" to unassessed pillar "${targetCriterion.name}" to guarantee comprehensive rubric assessment.`
+      activeListeningGuidance = `Briefly acknowledge their answer on the previous topic, then smoothly transition to assess ${targetCriterion.name}.`
+    }
+    // Case 3: Current pillar has missing concepts and we have enough time budget for one targeted follow-up probe
     else if (
       currentCriterion &&
+      currentCriterion.attempts < 2 &&
       ((answerAnalysis.missing_concepts && answerAnalysis.missing_concepts.length > 0) ||
        (answerAnalysis.claims_requiring_verification && answerAnalysis.claims_requiring_verification.length > 0) ||
-       (Number(answerAnalysis.depth) < 6 && currentCriterion.attempts < 3) ||
+       (Number(answerAnalysis.depth) < 6) ||
        currentCriterion.status === 'IN_EVALUATION')
     ) {
       const isHighDepth = Number(answerAnalysis.depth) >= 7
@@ -231,29 +315,30 @@ export const adaptivePolicyService = {
       reason = `Probing deeper into "${currentCriterion.name}". Candidate demonstrated partial evidence or missed key concepts (${(answerAnalysis.missing_concepts || []).slice(0, 3).join(', ')}).`
       activeListeningGuidance = `Explicitly reference what the candidate said, highlight the specific trade-off or concept that needs deeper justification, and ask them to elaborate on how they handle it in production.`
     }
-    // Case 3: Current pillar has sufficient evidence / mastery proven -> SWITCH_TOPIC to next unassessed pillar
+    // Case 4: Transition to any remaining unassessed pillar
     else if (unassessed.length > 0) {
-      // Prioritize highest weight unassessed rubric criterion
       const sortedUnassessed = [...unassessed].sort((a, b) => (b.weight || 3) - (a.weight || 3))
       targetCriterion = sortedUnassessed[0]
       recommendedAction = 'SWITCH_TOPIC'
       reason = `Current criterion "${currentCriterion?.name || 'Topic'}" has sufficient evidence. Transitioning to unassessed pillar: "${targetCriterion.name}".`
       activeListeningGuidance = `Briefly validate their answer on the prior topic, then smoothly transition to the new competency area (${targetCriterion.name}).`
     }
-    // Case 4: All criteria have at least initial evidence, but some need reinforcement
+    // Case 5: All criteria have at least initial evidence, but some need reinforcement
     else if (inEvaluation.length > 0) {
       targetCriterion = inEvaluation[0]
       recommendedAction = 'SWITCH_TOPIC'
-      reason = `Completing evaluation on pillar needing reinforcement: "${targetCriterion.name}".`
+      reason = `Reinforcing evidence on pillar: "${targetCriterion.name}".`
       activeListeningGuidance = `Transition to reinforce evidence for ${targetCriterion.name}.`
     }
-    // Case 5: All criteria covered
+    // Case 6: All criteria covered
     else {
       targetCriterion = updatedMatrix[0] || null
       recommendedAction = 'DEEPEN'
       reason = 'All criteria sufficiently evaluated. Probing advanced edge cases and systemic trade-offs.'
-      activeListeningGuidance = 'Praise their comprehensive grasp, and present a challenging production failure-mode scenario.'
+      activeListeningGuidance = 'Praise their comprehensive grasp, and present a challenging scenario.'
     }
+
+    const recommendedQuestionType = this.computeRecommendedQuestionType(askedQuestions, turnSequence, effectiveAllowedTypes, targetCriterion)
 
     return {
       updatedMatrix,
@@ -279,6 +364,12 @@ export const adaptivePolicyService = {
     candidateAnswer = '',
     jobTitle = '',
     askedQuestions = [],
+    baselineDifficulty = 'MEDIUM',
+    allowedTypes = [],
+    askAboutProjects = true,
+    backgroundType = 'TECHNICAL',
+    timeRemainingSeconds = 0,
+    durationMinutes = 20,
   }) {
     return this.computeAdaptiveStep({
       coverageMatrix,
@@ -288,6 +379,12 @@ export const adaptivePolicyService = {
       candidateAnswer,
       jobTitle,
       askedQuestions,
+      baselineDifficulty,
+      allowedTypes,
+      askAboutProjects,
+      backgroundType,
+      timeRemainingSeconds,
+      durationMinutes,
     })
   },
 }

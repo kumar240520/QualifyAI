@@ -29,7 +29,9 @@ export const voiceController = {
       res.setHeader('X-Accel-Buffering', 'no')
       res.flushHeaders?.()
 
-      const turnId = randomUUID()
+      const turnId = req.body?.turnId || randomUUID()
+      const questionId = req.body?.questionId || null
+      const sequence = typeof req.body?.sequence === 'number' ? req.body.sequence : null
       const abortController = new AbortController()
       res.on('close', () => {
         if (!res.writableEnded) abortController.abort()
@@ -37,7 +39,7 @@ export const voiceController = {
       const write = (event) => {
         if (!res.destroyed && !res.writableEnded) res.write(`${JSON.stringify(event)}\n`)
       }
-      write({ type: 'start', audioTurnId: turnId, text })
+      write({ type: 'start', audioTurnId: turnId, questionId, sequence, text })
 
       try {
         const result = await ttsManager.synthesize({
@@ -45,11 +47,27 @@ export const voiceController = {
           voiceProfile: DEFAULT_VOICE_PROFILE,
           preferredProvider: 'cosyvoice',
           timeoutMs: Math.max(30000, text.length * 150),
-          onChunk: (chunk) => write({ type: 'audio_chunk', audioTurnId: turnId, ...chunk }),
+          signal: abortController.signal,
+          onChunk: (chunk) => write({ type: 'audio_chunk', audioTurnId: turnId, questionId, sequence, ...chunk }),
         })
-        write({ type: 'complete', audioTurnId: turnId, text: result.fullTranscript || text, provider: result.providerUsed || 'cosyvoice' })
+        write({
+          type: 'complete',
+          audioTurnId: turnId,
+          questionId,
+          sequence,
+          text: result.fullTranscript || text,
+          provider: result.providerUsed || 'cosyvoice',
+        })
       } catch (synthesisError) {
-        write({ type: 'error', audioTurnId: turnId, error: synthesisError.message || 'CosyVoice could not synthesize this prompt.' })
+        if (!abortController.signal.aborted) {
+          write({
+            type: 'error',
+            audioTurnId: turnId,
+            questionId,
+            sequence,
+            error: synthesisError.message || 'CosyVoice could not synthesize this prompt.',
+          })
+        }
       } finally {
         if (!res.destroyed && !res.writableEnded) res.end()
       }

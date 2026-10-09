@@ -181,7 +181,15 @@ export function validateRecruiterOnboarding({ fullName, companyName, website, se
 /**
  * Validate Job Requisition Form
  */
-export function validateJobCreation({ title, description, department, seniority }) {
+export function validateJobCreation({
+  title,
+  description,
+  department,
+  seniority,
+  background_type,
+  custom_background,
+  allowed_question_types,
+}) {
   const errors = {}
 
   const titleRes = validateText(title, 'Job title', { min: 3, max: 200, required: true })
@@ -189,6 +197,12 @@ export function validateJobCreation({ title, description, department, seniority 
 
   const descRes = validateText(description, 'Job description', { min: 20, max: 50000, required: true })
   if (!descRes.valid) errors.description = descRes.error
+
+
+
+  if (Array.isArray(allowed_question_types) && allowed_question_types.length === 0) {
+    errors.allowed_question_types = 'At least one allowed question type must be selected.'
+  }
 
   return {
     isValid: Object.keys(errors).length === 0,

@@ -124,4 +124,20 @@ export const candidateService = {
     }
     return data.data
   },
+
+  /**
+   * Delete / remove candidate from job requisition (Requirement 4)
+   */
+  async deleteCandidate(jobId, candidateId) {
+    const headers = await getAuthHeaders()
+    const res = await fetch(`${API_BASE_URL}/jobs/${jobId}/candidates/${candidateId}`, {
+      method: 'DELETE',
+      headers,
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) {
+      throw parseServiceError(data, res, 'Failed to delete candidate.')
+    }
+    return data.data || data
+  },
 }

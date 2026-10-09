@@ -459,8 +459,8 @@ Respond strictly with a valid JSON object matching this schema:
         job_id: jobId,
         rubric_criterion_id: matchedCriterionId,
         type: qType,
-        question_text: q.question_text,
-        difficulty: q.difficulty || 'MEDIUM',
+        question_text: (idx === 0 && job.opening_question) ? job.opening_question : q.question_text,
+        difficulty: q.difficulty || job.target_difficulty || 'MEDIUM',
         context_order: q.context_order || idx + 1,
         metadata: {
           type: qType,
@@ -488,6 +488,123 @@ Respond strictly with a valid JSON object matching this schema:
     }
 
     return insertedQuestions || []
+  },
+
+  /**
+   * Update the first / opening question for a job requisition (Requirement 8)
+   */
+  async updateOpeningQuestion({ jobId, organizationId, openingQuestion, userToken }) {
+    const supabase = userToken ? getSupabaseClient(userToken) : getServiceSupabaseClient()
+    await this._verifyJobBelongsToOrg(jobId, organizationId, supabase)
+
+    const cleanQuestion = String(openingQuestion || '').trim()
+    if (!cleanQuestion || cleanQuestion.length < 5) {
+      throw new Error('Opening question must be at least 5 characters long.')
+    }
+
+    // 1. Update jobs table
+    const { data: updatedJob, error: jobErr } = await supabase
+      .from('jobs')
+      .update({ opening_question: cleanQuestion })
+      .eq('id', jobId)
+      .eq('organization_id', organizationId)
+      .select()
+      .single()
+
+    if (jobErr) {
+      throw new Error(`Failed to update opening question on job: ${jobErr.message}`)
+    }
+
+    // 2. If questions pool exists, update the first question
+    const { data: existingQuestions } = await supabase
+      .from('questions')
+      .select('id, context_order')
+      .eq('job_id', jobId)
+      .order('context_order', { ascending: true })
+      .limit(1)
+
+    if (existingQuestions && existingQuestions.length > 0) {
+      await supabase
+        .from('questions')
+        .update({ question_text: cleanQuestion })
+        .eq('id', existingQuestions[0].id)
+    }
+
+    return { success: true, opening_question: cleanQuestion, job: updatedJob }
+  },
+
+  /**
+   * Update the target difficulty for a job requisition (Requirement 9)
+   */
+  async updateDifficulty({ jobId, organizationId, difficulty, userToken }) {
+    const supabase = userToken ? getSupabaseClient(userToken) : getServiceSupabaseClient()
+    await this._verifyJobBelongsToOrg(jobId, organizationId, supabase)
+
+    const validLevels = ['EASY', 'MEDIUM', 'HARD']
+    const normalized = String(difficulty || '').toUpperCase().trim()
+    if (!validLevels.includes(normalized)) {
+      throw new Error(`Invalid difficulty level "${difficulty}". Allowed: ${validLevels.join(', ')}`)
+    }
+
+    const { data: updatedJob, error: jobErr } = await supabase
+      .from('jobs')
+      .update({ target_difficulty: normalized })
+      .eq('id', jobId)
+      .eq('organization_id', organizationId)
+      .select()
+      .single()
+
+    if (jobErr) {
+      throw new Error(`Failed to update difficulty on job: ${jobErr.message}`)
+    }
+
+    return { success: true, target_difficulty: normalized, job: updatedJob }
+  },
+
+  /**
+   * Update an existing question
+   */
+  async updateQuestion({ jobId, organizationId, questionId, questionData, userToken }) {
+    const supabase = userToken ? getSupabaseClient(userToken) : getServiceSupabaseClient()
+    await this._verifyJobBelongsToOrg(jobId, organizationId, supabase)
+
+    const payload = {}
+    if (questionData.question_text !== undefined) payload.question_text = String(questionData.question_text).trim()
+    if (questionData.type !== undefined) payload.type = questionData.type
+    if (questionData.difficulty !== undefined) payload.difficulty = questionData.difficulty
+    if (questionData.metadata !== undefined) payload.metadata = questionData.metadata
+
+    const { data: updated, error } = await supabase
+      .from('questions')
+      .update(payload)
+      .eq('id', questionId)
+      .eq('job_id', jobId)
+      .select('*, rubric_criteria(id, name, weight)')
+      .single()
+
+    if (error) {
+      throw new Error(`Failed to update question: ${error.message}`)
+    }
+
+    // If this was the first question, also synchronize job.opening_question
+    if (payload.question_text) {
+      const { data: firstQ } = await supabase
+        .from('questions')
+        .select('id')
+        .eq('job_id', jobId)
+        .order('context_order', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+
+      if (firstQ?.id === questionId) {
+        await supabase
+          .from('jobs')
+          .update({ opening_question: payload.question_text })
+          .eq('id', jobId)
+      }
+    }
+
+    return updated
   },
 
   /**

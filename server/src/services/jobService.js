@@ -16,6 +16,7 @@ export const jobService = {
       .from('jobs')
       .select('*, job_requirements(*)')
       .eq('organization_id', organizationId)
+      .is('deleted_at', null)
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -37,6 +38,7 @@ export const jobService = {
       .select('*, job_requirements(*)')
       .eq('id', jobId)
       .eq('organization_id', organizationId)
+      .is('deleted_at', null)
       .single()
 
     if (error || !job) {
@@ -49,7 +51,22 @@ export const jobService = {
   /**
    * Create a new job requisition
    */
-  async createJob({ organizationId, userId, title, description, department, seniority = 'SENIOR', userToken }) {
+  async createJob({
+    organizationId,
+    userId,
+    title,
+    description,
+    department,
+    seniority = 'SENIOR',
+    background_type = 'TECHNICAL',
+    custom_background = null,
+    allowed_question_types = ['SHORT_ANSWER', 'DESCRIPTIVE', 'MULTIPLE_CHOICE', 'SCENARIO'],
+    custom_question_types = [],
+    ask_about_projects = true,
+    opening_question = null,
+    target_difficulty = 'MEDIUM',
+    userToken,
+  }) {
     if (!title || !description) {
       throw new Error('Job title and description are required.')
     }
@@ -65,6 +82,15 @@ export const jobService = {
         department: department?.trim() || 'Engineering',
         seniority: seniority || 'SENIOR',
         status: 'ACTIVE',
+        background_type: background_type || 'TECHNICAL',
+        custom_background: background_type === 'CUSTOM' ? (custom_background?.trim() || null) : null,
+        allowed_question_types: Array.isArray(allowed_question_types) && allowed_question_types.length > 0
+          ? allowed_question_types
+          : ['SHORT_ANSWER', 'DESCRIPTIVE', 'MULTIPLE_CHOICE', 'SCENARIO'],
+        custom_question_types: Array.isArray(custom_question_types) ? custom_question_types : [],
+        ask_about_projects: ask_about_projects !== undefined ? Boolean(ask_about_projects) : (background_type === 'TECHNICAL'),
+        opening_question: opening_question?.trim() || null,
+        target_difficulty: target_difficulty || 'MEDIUM',
         created_by: userId,
       })
       .select()
@@ -76,6 +102,69 @@ export const jobService = {
     }
 
     return job
+  },
+
+  /**
+   * Update an existing job requisition
+   */
+  async updateJob({ jobId, organizationId, updateData = {}, userToken }) {
+    await this.getJobById({ jobId, organizationId, userToken })
+    const supabase = userToken ? getSupabaseClient(userToken) : getServiceSupabaseClient()
+
+    const updatePayload = {}
+    if (updateData.title !== undefined) updatePayload.title = updateData.title.trim()
+    if (updateData.description !== undefined) updatePayload.description = updateData.description.trim()
+    if (updateData.department !== undefined) updatePayload.department = updateData.department.trim()
+    if (updateData.seniority !== undefined) updatePayload.seniority = updateData.seniority
+    if (updateData.status !== undefined) updatePayload.status = updateData.status
+    if (updateData.background_type !== undefined) updatePayload.background_type = updateData.background_type
+    if (updateData.custom_background !== undefined) updatePayload.custom_background = updateData.custom_background
+    if (updateData.allowed_question_types !== undefined) updatePayload.allowed_question_types = updateData.allowed_question_types
+    if (updateData.custom_question_types !== undefined) updatePayload.custom_question_types = updateData.custom_question_types
+    if (updateData.ask_about_projects !== undefined) updatePayload.ask_about_projects = updateData.ask_about_projects
+    if (updateData.opening_question !== undefined) updatePayload.opening_question = updateData.opening_question
+    if (updateData.target_difficulty !== undefined) updatePayload.target_difficulty = updateData.target_difficulty
+
+    const { data: updated, error } = await supabase
+      .from('jobs')
+      .update(updatePayload)
+      .eq('id', jobId)
+      .eq('organization_id', organizationId)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('[JobService.updateJob] Database error:', error.message)
+      throw new Error(`Failed to update job: ${error.message}`)
+    }
+
+    return updated
+  },
+
+  /**
+   * Soft-delete / archive a job requisition
+   */
+  async deleteJob({ jobId, organizationId, userToken }) {
+    const job = await this.getJobById({ jobId, organizationId, userToken })
+    const supabase = userToken ? getSupabaseClient(userToken) : getServiceSupabaseClient()
+
+    const { data: updated, error } = await supabase
+      .from('jobs')
+      .update({
+        deleted_at: new Date().toISOString(),
+        status: 'CLOSED',
+      })
+      .eq('id', jobId)
+      .eq('organization_id', organizationId)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('[JobService.deleteJob] Database error:', error.message)
+      throw new Error(`Failed to delete job: ${error.message}`)
+    }
+
+    return { success: true, id: jobId, message: `Requisition "${job.title}" successfully deleted.` }
   },
 
   /**

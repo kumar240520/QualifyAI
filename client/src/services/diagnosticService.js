@@ -9,8 +9,9 @@ export const diagnosticService = {
   /**
    * Fetch candidate diagnostic report by invitation token
    */
-  async getDiagnosticByToken(token) {
-    const res = await fetch(`${API_BASE}/interviews/token/${token}/diagnostic`, {
+  async getDiagnosticByToken(token, refresh = false) {
+    const query = refresh ? '?refresh=true' : ''
+    const res = await fetch(`${API_BASE}/interviews/token/${token}/diagnostic${query}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -26,13 +27,14 @@ export const diagnosticService = {
   /**
    * Fetch candidate diagnostic report by interview ID
    */
-  async getDiagnosticByInterviewId(interviewId, authToken = null) {
+  async getDiagnosticByInterviewId(interviewId, authToken = null, refresh = false) {
     const headers = { 'Content-Type': 'application/json' }
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`
     }
 
-    const res = await fetch(`${API_BASE}/interviews/${interviewId}/diagnostic`, {
+    const query = refresh ? '?refresh=true' : ''
+    const res = await fetch(`${API_BASE}/interviews/${interviewId}/diagnostic${query}`, {
       method: 'GET',
       headers,
     })

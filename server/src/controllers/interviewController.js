@@ -39,6 +39,7 @@ export const interviewController = {
         questionSequence: validated.questionSequence,
         questionId: validated.questionId,
         inputMethod: validated.inputMethod,
+        structuredAnswer: validated.structuredAnswer,
       })
 
       return res.status(200).json({

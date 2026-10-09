@@ -14,8 +14,14 @@ import {
   ChevronDown,
   ChevronUp,
   RotateCcw,
+  Bug,
+  ListOrdered,
+  Sliders,
+  Link2,
+  Calculator,
 } from 'lucide-react'
 import { isThoughtOrMetaPlanning } from '../../utils/questionNormalizer.js'
+import { normalizeQuestionType } from '../../utils/questionTypeRegistry.js'
 
 export default function ActiveQuestionPanel({
   question,
@@ -41,21 +47,30 @@ export default function ActiveQuestionPanel({
   const typeConfig = {
     MULTIPLE_CHOICE: { label: 'Multiple Choice', icon: CheckSquare, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
     MULTI_SELECT: { label: 'Multi-Select', icon: CheckSquare, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
-    FILL_IN_THE_BLANK: { label: 'Fill in the Blank', icon: HelpCircle, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
-    CODE_OUTPUT: { label: 'Output Prediction', icon: Terminal, color: 'text-amber-600 bg-amber-50 border-amber-200' },
-    CODE_WRITING: { label: 'Code Implementation', icon: Code2, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-    SQL: { label: 'SQL Query', icon: Database, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
     TRUE_FALSE: { label: 'True / False', icon: HelpCircle, color: 'text-blue-600 bg-blue-50 border-blue-200' },
+    SHORT_ANSWER: { label: 'Short Answer', icon: MessageSquare, color: 'text-sky-600 bg-sky-50 border-sky-200' },
+    DESCRIPTIVE: { label: 'Descriptive / Technical', icon: Sparkles, color: 'text-blue-600 bg-blue-50 border-blue-200' },
+    FILL_IN_THE_BLANK: { label: 'Fill in the Blank', icon: HelpCircle, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
+    CODING_CHALLENGE: { label: 'Coding Challenge', icon: Code2, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+    PREDICT_CODE_OUTPUT: { label: 'Predict Output', icon: Terminal, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+    DEBUGGING: { label: 'Debugging & Repair', icon: Bug, color: 'text-rose-600 bg-rose-50 border-rose-200' },
+    COMPLETE_THE_CODE: { label: 'Complete Code', icon: Code2, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+    ARRANGE_ORDER: { label: 'Arrange in Order', icon: ListOrdered, color: 'text-violet-600 bg-violet-50 border-violet-200' },
+    SELECT_MOST_APPROPRIATE: { label: 'Select Best Option', icon: Layers, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
+    SLIDER_SCALE: { label: 'Numeric Scale / Slider', icon: Sliders, color: 'text-teal-600 bg-teal-50 border-teal-200' },
+    MATCHING_PAIRS: { label: 'Matching Pairs', icon: Link2, color: 'text-purple-600 bg-purple-50 border-purple-200' },
+    NUMERICAL_APTITUDE: { label: 'Numerical Aptitude', icon: Calculator, color: 'text-blue-600 bg-blue-50 border-blue-200' },
+    SQL: { label: 'SQL Query', icon: Database, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
     SCENARIO: { label: 'System Scenario', icon: Layers, color: 'text-amber-600 bg-amber-50 border-amber-200' },
     BEHAVIORAL: { label: 'Behavioral & Experience', icon: Award, color: 'text-violet-600 bg-violet-50 border-violet-200' },
-    DESCRIPTIVE: { label: 'Technical Discussion', icon: Sparkles, color: 'text-blue-600 bg-blue-50 border-blue-200' },
   }
 
-  const currentType = typeConfig[question?.type] || typeConfig.DESCRIPTIVE
+  const normType = normalizeQuestionType(question?.type)
+  const currentType = typeConfig[normType] || typeConfig[question?.type] || typeConfig.DESCRIPTIVE
   const TypeIcon = currentType.icon
 
-  // Target text is strictly the real technical question prompt
-  const targetText = question?.text || ''
+  // Target text is strictly the real technical question prompt from the canonical record
+  const targetText = question?.text || question?.question_text || ''
 
   // Filter out any internal thought traces or empty turns
   const filteredTranscripts = (transcripts || []).filter(
@@ -147,7 +162,7 @@ export default function ActiveQuestionPanel({
         </div>
       </div>
 
-      {/* Active Question Prompt Display (Instantly Synchronized with Spoken Delivery) */}
+      {/* Active Question Prompt Display (Authoritative Canonical Question Text) */}
       <div className="space-y-3">
         {roomStartupCountdown > 0 ? (
           <div className="flex items-center gap-2.5 text-blue-600 font-semibold text-sm">
@@ -160,26 +175,11 @@ export default function ActiveQuestionPanel({
           <>
             <h2
               key={question?.id || sequence}
-              className="text-base sm:text-lg md:text-[19px] font-sans font-bold text-slate-900 leading-relaxed tracking-normal animate-fade-in"
+              data-testid="main-question-title"
+              className="text-base sm:text-lg md:text-[19px] font-sans font-bold text-slate-900 leading-relaxed tracking-normal whitespace-normal break-words animate-fade-in"
             >
               {targetText || 'Loading active question...'}
             </h2>
-
-            {/* Live Spoken Transcript (Only displayed while AI is actively speaking aloud) */}
-            {Boolean(liveAiSpeech) && (
-              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-blue-50/95 via-indigo-50/90 to-slate-50 border border-blue-200/90 text-blue-950 text-xs flex items-start gap-2.5 shadow-2xs animate-fade-in">
-                <Volume2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5 animate-pulse" />
-                <div className="flex-1 space-y-1">
-                  <div className="text-[10px] font-mono font-bold text-blue-700 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />
-                    <span>AI Interviewer Speaking Aloud</span>
-                  </div>
-                  <p className="text-xs sm:text-[13px] text-slate-800 leading-relaxed font-sans italic font-medium">
-                    &ldquo;{liveAiSpeech}&rdquo;
-                  </p>
-                </div>
-              </div>
-            )}
 
             {/* Room Rules & Guidelines (Rendered on Question 0 & Opening) */}
             {question?.metadata?.room_rules && question.metadata.room_rules.length > 0 && (

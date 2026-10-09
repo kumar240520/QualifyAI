@@ -10,7 +10,8 @@ export const diagnosticController = {
   async getDiagnosticReport(req, res) {
     try {
       const interviewId = req.params.id
-      const report = await candidateDiagnosticService.getCandidateDiagnostic(interviewId)
+      const forceRefresh = req.query.refresh === 'true'
+      const report = await candidateDiagnosticService.getCandidateDiagnostic(interviewId, { forceRefresh })
 
       return res.status(200).json({
         success: true,
@@ -32,7 +33,8 @@ export const diagnosticController = {
   async getDiagnosticByToken(req, res) {
     try {
       const token = req.params.token
-      const report = await candidateDiagnosticService.getCandidateDiagnosticByToken(token)
+      const forceRefresh = req.query.refresh === 'true'
+      const report = await candidateDiagnosticService.getCandidateDiagnosticByToken(token, { forceRefresh })
 
       return res.status(200).json({
         success: true,
@@ -53,7 +55,7 @@ export const diagnosticController = {
   async generateDiagnosticReport(req, res) {
     try {
       const interviewId = req.params.id
-      const report = await candidateDiagnosticService.generateCandidateDiagnostic(interviewId)
+      const report = await candidateDiagnosticService.generateCandidateDiagnostic(interviewId, { forceRefresh: true })
 
       return res.status(200).json({
         success: true,

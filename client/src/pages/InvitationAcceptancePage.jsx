@@ -29,6 +29,14 @@ import { VoiceInterviewEngine } from '../services/voiceInterviewEngine.js'
 import { validateName, validatePhone } from '../utils/validators.js'
 import { normalizeApiError } from '../utils/errorNormalizer.js'
 import { VisualProctoringService } from '../services/visualProctoringService.js'
+import { checkDeviceCompatibility } from '../utils/deviceCompatibility.js'
+import DesktopRequiredScreen from '../components/common/DesktopRequiredScreen.jsx'
+import {
+  MICROPHONE_VERIFICATION_STATES,
+  analyzeAudioFrame,
+  isFrameNonSilent,
+  evaluateRollingWindow,
+} from '../utils/microphoneValidator.js'
 
 /**
  * Modernized Candidate Assessment Onboarding & Staging Flow
@@ -40,6 +48,9 @@ import { VisualProctoringService } from '../services/visualProctoringService.js'
 export default function InvitationAcceptancePage() {
   const { token } = useParams()
   const navigate = useNavigate()
+
+  // Hardware compatibility gate: Desktop / PC required (Requirement 10)
+  const [deviceCheck] = useState(() => checkDeviceCompatibility())
 
   const [invitationData, setInvitationData] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -66,6 +77,12 @@ export default function InvitationAcceptancePage() {
   // Stage 3: Real Mic Check & Full Screen State
   const [micAudioLevel, setMicAudioLevel] = useState(0)
   const [micLevelDb, setMicLevelDb] = useState(-60)
+  const [micVerificationState, setMicVerificationState] = useState(
+    MICROPHONE_VERIFICATION_STATES.WAITING_FOR_INPUT
+  )
+  const [micStatusMessage, setMicStatusMessage] = useState(
+    'Starting microphone check automatically...'
+  )
   const [audioInputDevices, setAudioInputDevices] = useState([])
   const [selectedMicId, setSelectedMicId] = useState('')
   const [micTestError, setMicTestError] = useState('')
@@ -82,6 +99,8 @@ export default function InvitationAcceptancePage() {
   const animFrameRef = useRef(null)
   const micStreamRef = useRef(null)
   const micRequestIdRef = useRef(0)
+  const rollingFramesRef = useRef([])
+  const noiseFloorRef = useRef(-65)
   const speechDetectedSinceRef = useRef(null)
   const cameraVideoRef = useRef(null)
   const visualProctoringRef = useRef(null)
@@ -178,17 +197,28 @@ export default function InvitationAcceptancePage() {
     }
   }
 
-  // Measure actual input RMS in dBFS, like a browser input level meter.
-  const handleStartMicTest = async (requestedDeviceId = selectedMicId) => {
-    const requestId = ++micRequestIdRef.current
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
-    analyserRef.current = null
-    if (micStreamRef.current) micStreamRef.current.getTracks().forEach((track) => track.stop())
-    micStreamRef.current = null
+  const stopMicTest = () => {
+    micRequestIdRef.current += 1
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current)
+      animFrameRef.current = null
+    }
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop())
+      micStreamRef.current = null
+    }
     if (audioContextRef.current) {
-      try { await audioContextRef.current.close() } catch (_) {}
+      try { audioContextRef.current.close().catch(() => {}) } catch (_) {}
       audioContextRef.current = null
     }
+    analyserRef.current = null
+    rollingFramesRef.current = []
+  }
+
+  // Measure actual input RMS and validate technical acoustic capture (quiet speech allowed, clicks rejected)
+  const handleStartMicTest = async (requestedDeviceId = selectedMicId) => {
+    stopMicTest()
+    const requestId = micRequestIdRef.current
 
     try {
       setIsMicTesting(true)
@@ -196,7 +226,12 @@ export default function InvitationAcceptancePage() {
       setMicTestError('')
       setMicAudioLevel(0)
       setMicLevelDb(-60)
+      rollingFramesRef.current = []
+      noiseFloorRef.current = -65
+      setMicVerificationState(MICROPHONE_VERIFICATION_STATES.WAITING_FOR_INPUT)
+      setMicStatusMessage('Microphone active — speak normally into your microphone...')
       speechDetectedSinceRef.current = null
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           ...(requestedDeviceId ? { deviceId: { exact: requestedDeviceId } } : {}),
@@ -230,7 +265,10 @@ export default function InvitationAcceptancePage() {
           setIsMicTesting(false)
           setAudioCheckPassed(false)
           setMicAudioLevel(0)
-          setMicTestError('The selected microphone disconnected. Choose an available input device.')
+          const errorMsg = 'The selected microphone disconnected. Choose an available input device.'
+          setMicVerificationState(MICROPHONE_VERIFICATION_STATES.NEEDS_ATTENTION)
+          setMicTestError(errorMsg)
+          setMicStatusMessage(errorMsg)
         }
       })
 
@@ -258,34 +296,54 @@ export default function InvitationAcceptancePage() {
       const updateLevel = () => {
         if (requestId !== micRequestIdRef.current || !analyserRef.current) return
         analyserRef.current.getFloatTimeDomainData(timeData)
-        let sumSquares = 0
-        for (let i = 0; i < timeData.length; i++) {
-          sumSquares += timeData[i] * timeData[i]
+        const frameMetrics = analyzeAudioFrame(timeData)
+
+        // Dynamic noise floor tracking during quiet/ambient periods
+        if (frameMetrics.db < -50) {
+          noiseFloorRef.current = noiseFloorRef.current * 0.95 + frameMetrics.db * 0.05
         }
-        const rms = Math.sqrt(sumSquares / timeData.length)
-        const db = rms > 0 ? 20 * Math.log10(rms) : -90
-        const dbClamped = Math.max(-60, Math.min(0, db))
+
+        const isNonSilent = isFrameNonSilent(frameMetrics, noiseFloorRef.current)
+        const now = Date.now()
+
+        rollingFramesRef.current.push({
+          timestamp: now,
+          db: frameMetrics.db,
+          rms: frameMetrics.rms,
+          peakSample: frameMetrics.peakSample,
+          zeroCrossings: frameMetrics.zeroCrossings,
+          isDigitalSilence: frameMetrics.isDigitalSilence,
+          isNonSilent,
+        })
+
+        // Retain rolling frame history
+        if (rollingFramesRef.current.length > 60) {
+          rollingFramesRef.current = rollingFramesRef.current.filter((f) => now - f.timestamp <= 1200)
+        }
+
+        // Live visual meter (diagnostic visual indicator - does not gate verification)
+        const dbClamped = Math.max(-60, Math.min(0, frameMetrics.db))
         const rawLevel = Math.round(((dbClamped + 60) / 60) * 100)
         if (rawLevel > smoothedLevel) {
           smoothedLevel += (rawLevel - smoothedLevel) * 0.55
         } else {
           smoothedLevel += (rawLevel - smoothedLevel) * 0.18
         }
-        const now = Date.now()
         if (now - lastUiUpdate >= 50) {
           setMicAudioLevel(Math.round(smoothedLevel))
           setMicLevelDb(Math.round(dbClamped))
           lastUiUpdate = now
         }
 
-        if (db > -45) {
-          speechDetectedSinceRef.current ??= now
-        } else {
-          speechDetectedSinceRef.current = null
-        }
-        if (speechDetectedSinceRef.current && now - speechDetectedSinceRef.current >= 350) {
+        // Technical signal verification over short rolling window
+        const evalResult = evaluateRollingWindow(rollingFramesRef.current, noiseFloorRef.current, now)
+        setMicVerificationState(evalResult.state)
+        setMicStatusMessage(evalResult.message)
+
+        if (evalResult.isVerified) {
           setAudioCheckPassed(true)
         }
+
         animFrameRef.current = requestAnimationFrame(updateLevel)
       }
       updateLevel()
@@ -298,11 +356,14 @@ export default function InvitationAcceptancePage() {
         : err.name === 'OverconstrainedError'
         ? 'That microphone could not be opened. Choose another input device.'
         : 'The microphone could not be started. Check it and try again.'
-      if (requestId === micRequestIdRef.current) setMicTestError(friendlyMessage)
       if (requestId === micRequestIdRef.current) {
+        setMicVerificationState(MICROPHONE_VERIFICATION_STATES.NEEDS_ATTENTION)
+        setMicTestError(friendlyMessage)
+        setMicStatusMessage(friendlyMessage)
         micStreamRef.current?.getTracks().forEach((track) => track.stop())
         micStreamRef.current = null
         setIsMicTesting(false)
+        setAudioCheckPassed(false)
       }
     }
   }
@@ -378,10 +439,7 @@ export default function InvitationAcceptancePage() {
   // Audio Context & Stream cleanup ONLY on unmount
   useEffect(() => {
     return () => {
-      micRequestIdRef.current += 1
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
-      if (audioContextRef.current) audioContextRef.current.close().catch(() => {})
-      if (micStreamRef.current) micStreamRef.current.getTracks().forEach((t) => t.stop())
+      stopMicTest()
       visualProctoringRef.current?.stop()
     }
   }, [])
@@ -487,6 +545,11 @@ export default function InvitationAcceptancePage() {
     }
   }, [])
 
+  // Desktop/PC hardware gate (Requirement 10)
+  if (!deviceCheck.isDesktop) {
+    return <DesktopRequiredScreen detectedType={deviceCheck.detectedType} />
+  }
+
   if (isLoading) {
     return (
       <div className="h-screen bg-[#f8fafc] text-slate-900 flex flex-col items-center justify-center p-6 space-y-4">
@@ -526,12 +589,12 @@ export default function InvitationAcceptancePage() {
     )
   }
 
-  const { job, candidate, organization } = invitationData
+  const { invitation, job, candidate, organization } = invitationData
 
   return (
-    <div className="h-screen w-screen bg-[#f8fafc] text-slate-900 font-sans flex flex-col overflow-hidden selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen w-full bg-[#f8fafc] text-slate-900 font-sans flex flex-col selection:bg-blue-600 selection:text-white">
       {/* Top Navigation Header */}
-      <header className="h-14 px-6 border-b border-slate-200/90 bg-white flex items-center justify-between shrink-0 z-10">
+      <header className="h-14 px-6 border-b border-slate-200/90 bg-white flex items-center justify-between shrink-0 sticky top-0 z-20">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-500 flex items-center justify-center shadow-md shadow-blue-500/20 text-white">
             <Sparkles className="w-4 h-4" />
@@ -557,9 +620,9 @@ export default function InvitationAcceptancePage() {
       </header>
 
       {/* Main 2-Column Split Workspace */}
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
+      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 min-h-[calc(100vh-3.5rem)]">
         {/* LEFT COLUMN: Role Context, Stepper & Proctoring Policy */}
-        <div className="lg:col-span-4 bg-white border-r border-slate-200/90 p-6 sm:p-8 lg:p-9 flex flex-col justify-between overflow-y-auto">
+        <aside className="lg:col-span-4 bg-white border-b lg:border-b-0 lg:border-r border-slate-200/90 p-6 sm:p-8 lg:p-9 flex flex-col justify-between lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-y-auto">
           <div className="space-y-6">
             {/* Position Summary Card */}
             <div className="p-6 rounded-2xl bg-gradient-to-b from-blue-50/60 via-slate-50/40 to-white border border-slate-200/80 space-y-3 shadow-2xs">
@@ -643,29 +706,31 @@ export default function InvitationAcceptancePage() {
             </div>
             <div className="flex items-center justify-between">
               <span>Duration:</span>
-              <span className="text-slate-800 font-semibold">~15–20 Minutes</span>
+              <span className="text-slate-800 font-semibold">
+                {invitation?.interview_duration_minutes ? `~${invitation.interview_duration_minutes} Minutes` : '~15–20 Minutes'}
+              </span>
             </div>
             <div className="flex items-center justify-between">
               <span>Lockdown:</span>
               <span className="text-rose-600 font-bold">Strict 3 Warnings Max</span>
             </div>
           </div>
-        </div>
+        </aside>
 
-        {/* RIGHT COLUMN: Interactive Form Surface (Spacious, Breathable & Highly Readable) */}
-        <div className="lg:col-span-8 bg-[#f8fafc] p-6 sm:p-8 lg:p-10 flex flex-col justify-between overflow-y-auto">
+        {/* RIGHT COLUMN: Interactive Form Surface (Directly in main area, no enclosing card) */}
+        <div className="lg:col-span-8 bg-[#f8fafc] p-6 sm:p-8 lg:p-12 flex flex-col justify-between">
           {/* STAGE 1: Profile Registration */}
           {currentStage === 1 && (
-            <div className="bg-white border border-slate-200/90 rounded-3xl p-7 sm:p-9 lg:p-10 shadow-xs flex-1 flex flex-col justify-between max-w-3xl mx-auto w-full my-auto space-y-8">
+            <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col justify-between space-y-8">
               <div className="space-y-6">
                 <div>
                   <span className="text-[10px] font-mono font-bold text-blue-600 uppercase tracking-widest">
                     Step 1 of 3 • Identity & Context
                   </span>
-                  <h3 className="text-2xl font-heading font-extrabold text-slate-900 tracking-tight mt-1 mb-2">
+                  <h3 className="text-2xl sm:text-3xl font-heading font-extrabold text-slate-900 tracking-tight mt-1 mb-2">
                     Candidate Verification & Profile Registration
                   </h3>
-                  <p className="text-sm text-slate-500 leading-relaxed">
+                  <p className="text-sm text-slate-500 leading-relaxed max-w-2xl">
                     Verify your contact information and engineering background before proceeding to examination rules and hardware checks.
                   </p>
                 </div>
@@ -677,115 +742,122 @@ export default function InvitationAcceptancePage() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 sm:gap-6 pt-2">
-                  <div className="space-y-2">
-                    <label className="block text-xs sm:text-sm font-semibold text-slate-700">
-                      Full Legal Name <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={candidateForm.fullName}
-                      onChange={(e) => {
-                        setCandidateForm({ ...candidateForm, fullName: e.target.value })
-                        if (candidateFieldErrors.fullName) {
-                          setCandidateFieldErrors((prev) => ({ ...prev, fullName: null }))
-                        }
-                      }}
-                      placeholder="e.g. Devon Kaelen"
-                      className={`w-full h-11 px-3.5 bg-slate-50 border rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none transition ${
-                        candidateFieldErrors.fullName
-                          ? 'border-rose-400 ring-2 ring-rose-400/20'
-                          : 'border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
-                      }`}
-                    />
-                    {candidateFieldErrors.fullName && (
-                      <p className="mt-1 text-xs text-rose-600 font-medium">{candidateFieldErrors.fullName}</p>
-                    )}
+                <div className="bg-white border border-slate-200/90 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-900 uppercase tracking-wider font-mono">
+                    <FileCheck className="w-4 h-4 text-blue-600" />
+                    <span>Candidate Profile Details</span>
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-xs sm:text-sm font-semibold text-slate-700">
-                      Registered Email
-                    </label>
-                    <input
-                      type="email"
-                      readOnly
-                      value={candidateForm.email}
-                      className="w-full h-11 px-3.5 bg-slate-100 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-500 outline-none cursor-not-allowed font-mono"
-                    />
-                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 sm:gap-6 pt-1">
+                    <div className="space-y-2">
+                      <label className="block text-xs sm:text-sm font-semibold text-slate-700">
+                        Full Legal Name <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={candidateForm.fullName}
+                        onChange={(e) => {
+                          setCandidateForm({ ...candidateForm, fullName: e.target.value })
+                          if (candidateFieldErrors.fullName) {
+                            setCandidateFieldErrors((prev) => ({ ...prev, fullName: null }))
+                          }
+                        }}
+                        placeholder="e.g. Devon Kaelen"
+                        className={`w-full h-11 px-3.5 bg-slate-50 border rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none transition ${
+                          candidateFieldErrors.fullName
+                            ? 'border-rose-400 ring-2 ring-rose-400/20'
+                            : 'border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
+                        }`}
+                      />
+                      {candidateFieldErrors.fullName && (
+                        <p className="mt-1 text-xs text-rose-600 font-medium">{candidateFieldErrors.fullName}</p>
+                      )}
+                    </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-xs sm:text-sm font-semibold text-slate-700">
-                      Phone Number <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="tel"
-                      value={candidateForm.phone}
-                      onChange={(e) => {
-                        setCandidateForm({ ...candidateForm, phone: e.target.value })
-                        if (candidateFieldErrors.phone) {
-                          setCandidateFieldErrors((prev) => ({ ...prev, phone: null }))
-                        }
-                      }}
-                      placeholder="+91 9876543210"
-                      className={`w-full h-11 px-3.5 bg-slate-50 border rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none transition ${
-                        candidateFieldErrors.phone
-                          ? 'border-rose-400 ring-2 ring-rose-400/20'
-                          : 'border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
-                      }`}
-                    />
-                    {candidateFieldErrors.phone && (
-                      <p className="mt-1 text-xs text-rose-600 font-medium">{candidateFieldErrors.phone}</p>
-                    )}
-                  </div>
+                    <div className="space-y-2">
+                      <label className="block text-xs sm:text-sm font-semibold text-slate-700">
+                        Registered Email
+                      </label>
+                      <input
+                        type="email"
+                        readOnly
+                        value={candidateForm.email}
+                        className="w-full h-11 px-3.5 bg-slate-100 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-500 outline-none cursor-not-allowed font-mono"
+                      />
+                    </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-xs sm:text-sm font-semibold text-slate-700">
-                      Experience Level
-                    </label>
-                    <select
-                      value={candidateForm.experienceYears}
-                      onChange={(e) => setCandidateForm({ ...candidateForm, experienceYears: e.target.value })}
-                      className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
-                    >
-                      <option value="0–2 Years">0 – 2 Years (Associate)</option>
-                      <option value="3–5 Years">3 – 5 Years (Mid-Level)</option>
-                      <option value="5–8 Years">5 – 8 Years (Senior)</option>
-                      <option value="8+ Years">8+ Years (Staff / Principal)</option>
-                    </select>
-                  </div>
+                    <div className="space-y-2">
+                      <label className="block text-xs sm:text-sm font-semibold text-slate-700">
+                        Phone Number <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="tel"
+                        value={candidateForm.phone}
+                        onChange={(e) => {
+                          setCandidateForm({ ...candidateForm, phone: e.target.value })
+                          if (candidateFieldErrors.phone) {
+                            setCandidateFieldErrors((prev) => ({ ...prev, phone: null }))
+                          }
+                        }}
+                        placeholder="+91 9876543210"
+                        className={`w-full h-11 px-3.5 bg-slate-50 border rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:outline-none transition ${
+                          candidateFieldErrors.phone
+                            ? 'border-rose-400 ring-2 ring-rose-400/20'
+                            : 'border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
+                        }`}
+                      />
+                      {candidateFieldErrors.phone && (
+                        <p className="mt-1 text-xs text-rose-600 font-medium">{candidateFieldErrors.phone}</p>
+                      )}
+                    </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-xs sm:text-sm font-semibold text-slate-700">
-                      Primary Technical Domain
-                    </label>
-                    <input
-                      type="text"
-                      value={candidateForm.specialization}
-                      onChange={(e) => setCandidateForm({ ...candidateForm, specialization: e.target.value })}
-                      placeholder="e.g. Distributed Systems, Go, Storage Engines"
-                      className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
-                    />
-                  </div>
+                    <div className="space-y-2">
+                      <label className="block text-xs sm:text-sm font-semibold text-slate-700">
+                        Experience Level
+                      </label>
+                      <select
+                        value={candidateForm.experienceYears}
+                        onChange={(e) => setCandidateForm({ ...candidateForm, experienceYears: e.target.value })}
+                        className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
+                      >
+                        <option value="0–2 Years">0 – 2 Years (Associate)</option>
+                        <option value="3–5 Years">3 – 5 Years (Mid-Level)</option>
+                        <option value="5–8 Years">5 – 8 Years (Senior)</option>
+                        <option value="8+ Years">8+ Years (Staff / Principal)</option>
+                      </select>
+                    </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-xs sm:text-sm font-semibold text-slate-700">
-                      Recent Employer or Institute
-                    </label>
-                    <input
-                      type="text"
-                      value={candidateForm.recentCompany}
-                      onChange={(e) => setCandidateForm({ ...candidateForm, recentCompany: e.target.value })}
-                      placeholder="e.g. Enterprise Infrastructure Corp"
-                      className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
-                    />
+                    <div className="space-y-2">
+                      <label className="block text-xs sm:text-sm font-semibold text-slate-700">
+                        Primary Technical Domain
+                      </label>
+                      <input
+                        type="text"
+                        value={candidateForm.specialization}
+                        onChange={(e) => setCandidateForm({ ...candidateForm, specialization: e.target.value })}
+                        placeholder="e.g. Distributed Systems, Go, Storage Engines"
+                        className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="block text-xs sm:text-sm font-semibold text-slate-700">
+                        Recent Employer or Institute
+                      </label>
+                      <input
+                        type="text"
+                        value={candidateForm.recentCompany}
+                        onChange={(e) => setCandidateForm({ ...candidateForm, recentCompany: e.target.value })}
+                        placeholder="e.g. Enterprise Infrastructure Corp"
+                        className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
 
               {/* Bottom Action Footer */}
-              <div className="pt-6 border-t border-slate-100 flex items-center justify-between">
+              <div className="pt-6 border-t border-slate-200/80 flex items-center justify-between mt-auto">
                 <span className="text-xs text-slate-400 font-mono">
                   Encrypted applicant telemetry record
                 </span>
@@ -819,16 +891,16 @@ export default function InvitationAcceptancePage() {
 
           {/* STAGE 2: Rules, Honor Code & Strict 3-Warning Tab Switch Policy */}
           {currentStage === 2 && (
-            <div className="bg-white border border-slate-200/90 rounded-3xl p-7 sm:p-9 lg:p-10 shadow-xs flex-1 flex flex-col justify-between max-w-3xl mx-auto w-full my-auto space-y-6">
-              <div className="space-y-5">
+            <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col justify-between space-y-8">
+              <div className="space-y-6">
                 <div>
                   <span className="text-[10px] font-mono font-bold text-blue-600 uppercase tracking-widest">
                     Step 2 of 3 • Mandatory Integrity Protocol
                   </span>
-                  <h3 className="text-2xl font-heading font-extrabold text-slate-900 tracking-tight mt-1 mb-2">
+                  <h3 className="text-2xl sm:text-3xl font-heading font-extrabold text-slate-900 tracking-tight mt-1 mb-2">
                     Examination Rules & 3-Warning Detention Protocol
                   </h3>
-                  <p className="text-sm text-slate-500 leading-relaxed">
+                  <p className="text-sm text-slate-500 leading-relaxed max-w-2xl">
                     Review all integrity rules and proctoring constraints carefully before entering hardware calibration.
                   </p>
                 </div>
@@ -848,7 +920,7 @@ export default function InvitationAcceptancePage() {
                 {/* 6 Structured, Beautifully Spaced Rule Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-4.5">
                   {/* Rule 1: Tab Switch & Window Focus */}
-                  <div className="p-4.5 sm:p-5 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-2 hover:bg-slate-50 transition">
+                  <div className="p-4.5 sm:p-5 rounded-2xl bg-white border border-slate-200/90 space-y-2 hover:bg-slate-50/80 transition shadow-2xs">
                     <div className="flex items-center justify-between">
                       <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
                         <EyeOff className="w-4 h-4 text-amber-600 shrink-0" />
@@ -864,7 +936,7 @@ export default function InvitationAcceptancePage() {
                   </div>
 
                   {/* Rule 2: Automatic Detention on 3rd Strike */}
-                  <div className="p-4.5 sm:p-5 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-2 hover:bg-slate-50 transition">
+                  <div className="p-4.5 sm:p-5 rounded-2xl bg-white border border-slate-200/90 space-y-2 hover:bg-slate-50/80 transition shadow-2xs">
                     <div className="flex items-center justify-between">
                       <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
                         <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
@@ -880,7 +952,7 @@ export default function InvitationAcceptancePage() {
                   </div>
 
                   {/* Rule 3: Continuous Full-Screen Enforcement */}
-                  <div className="p-4.5 sm:p-5 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-2 hover:bg-slate-50 transition">
+                  <div className="p-4.5 sm:p-5 rounded-2xl bg-white border border-slate-200/90 space-y-2 hover:bg-slate-50/80 transition shadow-2xs">
                     <div className="flex items-center justify-between">
                       <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
                         <Maximize2 className="w-4 h-4 text-indigo-600 shrink-0" />
@@ -896,7 +968,7 @@ export default function InvitationAcceptancePage() {
                   </div>
 
                   {/* Rule 4: Zero External AI Tools or Devices */}
-                  <div className="p-4.5 sm:p-5 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-2 hover:bg-slate-50 transition">
+                  <div className="p-4.5 sm:p-5 rounded-2xl bg-white border border-slate-200/90 space-y-2 hover:bg-slate-50/80 transition shadow-2xs">
                     <div className="flex items-center justify-between">
                       <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
                         <Lock className="w-4 h-4 text-blue-600 shrink-0" />
@@ -912,7 +984,7 @@ export default function InvitationAcceptancePage() {
                   </div>
 
                   {/* Rule 5: Continuous Audio & Speech Verification */}
-                  <div className="p-4.5 sm:p-5 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-2 hover:bg-slate-50 transition">
+                  <div className="p-4.5 sm:p-5 rounded-2xl bg-white border border-slate-200/90 space-y-2 hover:bg-slate-50/80 transition shadow-2xs">
                     <div className="flex items-center justify-between">
                       <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
                         <Mic className="w-4 h-4 text-purple-600 shrink-0" />
@@ -928,7 +1000,7 @@ export default function InvitationAcceptancePage() {
                   </div>
 
                   {/* Rule 6: Single-Use Cryptographic Session */}
-                  <div className="p-4.5 sm:p-5 rounded-2xl bg-slate-50/90 border border-slate-200 space-y-2 hover:bg-slate-50 transition">
+                  <div className="p-4.5 sm:p-5 rounded-2xl bg-white border border-slate-200/90 space-y-2 hover:bg-slate-50/80 transition shadow-2xs">
                     <div className="flex items-center justify-between">
                       <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
                         <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -950,7 +1022,7 @@ export default function InvitationAcceptancePage() {
                   className={`p-5 sm:p-6 rounded-2xl border-2 transition-all cursor-pointer select-none block shadow-2xs ${
                     rulesAccepted
                       ? 'bg-blue-50/70 border-blue-500 shadow-xs ring-2 ring-blue-100'
-                      : 'bg-slate-50/70 border-slate-200 hover:border-slate-300 hover:bg-slate-100/60'
+                      : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                   }`}
                 >
                   <div className="flex items-start gap-4">
@@ -976,7 +1048,7 @@ export default function InvitationAcceptancePage() {
               </div>
 
               {/* Bottom Action Footer */}
-              <div className="pt-6 border-t border-slate-100 flex items-center justify-between">
+              <div className="pt-6 border-t border-slate-200/80 flex items-center justify-between mt-auto">
                 <button
                   onClick={() => setCurrentStage(1)}
                   className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs sm:text-sm font-semibold transition cursor-pointer flex items-center gap-1.5"
@@ -1002,18 +1074,18 @@ export default function InvitationAcceptancePage() {
             </div>
           )}
 
-          {/* STAGE 3: Pre-Assessment Hardware Verification (Light-Themed Equalizer, No Slider) */}
+          {/* STAGE 3: Pre-Assessment Hardware Verification */}
           {currentStage === 3 && (
-            <div className="bg-white border border-slate-200/90 rounded-3xl p-7 sm:p-9 lg:p-10 shadow-xs flex-1 flex flex-col justify-between max-w-3xl mx-auto w-full my-auto space-y-7">
+            <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col justify-between space-y-8">
               <div className="space-y-6">
                 <div>
                   <span className="text-[10px] font-mono font-bold text-blue-600 uppercase tracking-widest">
                     Step 3 of 3 • Mandatory Verification Gate
                   </span>
-                  <h3 className="text-2xl font-heading font-extrabold text-slate-900 tracking-tight mt-1 mb-2">
+                  <h3 className="text-2xl sm:text-3xl font-heading font-extrabold text-slate-900 tracking-tight mt-1 mb-2">
                     Hardware Calibration & Full-Screen Lockdown
                   </h3>
-                  <p className="text-sm text-slate-500 leading-relaxed">
+                  <p className="text-sm text-slate-500 leading-relaxed max-w-2xl">
                     Verify live audio detection and confirm full-screen mode before launching your official session.
                   </p>
                 </div>
@@ -1037,14 +1109,24 @@ export default function InvitationAcceptancePage() {
                     className={`p-5 sm:p-6 rounded-2xl border transition-all ${
                       audioCheckPassed
                         ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950'
-                        : 'bg-slate-50/70 border-slate-200'
+                        : micVerificationState === MICROPHONE_VERIFICATION_STATES.NEEDS_ATTENTION
+                        ? 'bg-rose-50/50 border-rose-200 text-rose-950'
+                        : micVerificationState === MICROPHONE_VERIFICATION_STATES.INPUT_DETECTED
+                        ? 'bg-blue-50/40 border-blue-200 text-blue-950'
+                        : 'bg-white border-slate-200/90 shadow-2xs'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <div
                           className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
-                            audioCheckPassed ? 'bg-emerald-600 text-white shadow-xs' : 'bg-blue-50 text-blue-600 border border-blue-200'
+                            audioCheckPassed
+                              ? 'bg-emerald-600 text-white shadow-xs'
+                              : micVerificationState === MICROPHONE_VERIFICATION_STATES.NEEDS_ATTENTION
+                              ? 'bg-rose-100 text-rose-600 border border-rose-200'
+                              : micVerificationState === MICROPHONE_VERIFICATION_STATES.INPUT_DETECTED
+                              ? 'bg-blue-600 text-white shadow-xs'
+                              : 'bg-blue-50 text-blue-600 border border-blue-200'
                           }`}
                         >
                           <Mic className="w-4 h-4" />
@@ -1052,24 +1134,31 @@ export default function InvitationAcceptancePage() {
                         <div>
                           <div className="text-xs sm:text-sm font-bold flex items-center gap-2">
                             <span>Check 1: Live Microphone Audio Check</span>
-                            {audioCheckPassed && (
+                            {audioCheckPassed ? (
                               <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                                 VERIFIED ✓
+                              </span>
+                            ) : micVerificationState === MICROPHONE_VERIFICATION_STATES.INPUT_DETECTED ? (
+                              <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                                INPUT DETECTED
+                              </span>
+                            ) : micVerificationState === MICROPHONE_VERIFICATION_STATES.NEEDS_ATTENTION ? (
+                              <span className="text-[10px] font-mono font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
+                                NEEDS ATTENTION
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-mono font-bold text-slate-600 bg-slate-200/80 px-2 py-0.5 rounded-full">
+                                WAITING FOR INPUT
                               </span>
                             )}
                           </div>
                           <div className="text-xs text-slate-500 mt-0.5 leading-normal">
                             {audioCheckPassed
-                              ? 'Microphone is receiving your voice.'
-                              : micTestError
-                              ? micTestError
-                              : isMicTesting
-                              ? 'Microphone active — speak normally into your microphone...'
-                              : 'Starting microphone check automatically...'}
+                              ? 'Microphone verified. Genuine voice signal captured successfully.'
+                              : micStatusMessage || 'Starting microphone check automatically...'}
                           </div>
                         </div>
                       </div>
-
                     </div>
 
                     <div className="space-y-4 pt-1">
@@ -1081,6 +1170,7 @@ export default function InvitationAcceptancePage() {
                             const deviceId = event.target.value
                             setSelectedMicId(deviceId)
                             setAudioCheckPassed(false)
+                            setMicVerificationState(MICROPHONE_VERIFICATION_STATES.WAITING_FOR_INPUT)
                             handleStartMicTest(deviceId)
                           }}
                           disabled={!audioInputDevices.length}
@@ -1095,51 +1185,61 @@ export default function InvitationAcceptancePage() {
                         </select>
                       </label>
 
-                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-inner">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50/60 px-4 py-4 shadow-inner">
                         <div className="mb-3 flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-700">Live input level</span>
+                          <span className="font-semibold text-slate-700">Live input level (Diagnostic meter)</span>
                           <span className="font-mono tabular-nums text-slate-500">{isMicTesting ? `${micLevelDb} dB` : 'Mic off'}</span>
                         </div>
                         <div
                           className="h-4 overflow-hidden rounded-full bg-slate-100 ring-1 ring-inset ring-slate-200"
                           role="meter"
-                          aria-label="Microphone input level"
+                          aria-label="Microphone input level (Diagnostic visual indicator)"
                           aria-valuemin={0}
                           aria-valuemax={100}
                           aria-valuenow={micAudioLevel}
                         >
                           <div
-                            className={`h-full rounded-full transition-[width] duration-75 ${audioCheckPassed ? 'bg-emerald-500' : micAudioLevel > 70 ? 'bg-amber-400' : 'bg-blue-500'}`}
+                            className={`h-full rounded-full transition-[width] duration-75 ${
+                              audioCheckPassed
+                                ? 'bg-emerald-500'
+                                : micAudioLevel > 70
+                                ? 'bg-amber-400'
+                                : 'bg-blue-500'
+                            }`}
                             style={{ width: `${micAudioLevel}%` }}
                           />
                         </div>
                         <div className="mt-2 flex justify-between text-[10px] text-slate-400">
-                          <span>Quiet</span><span>Good level</span><span>Too loud</span>
+                          <span>Quiet</span><span>Normal conversational level</span><span>Loud</span>
                         </div>
                         <p className="mt-3 min-h-5 text-xs text-slate-600" aria-live="polite">
-                          {micTestError || (audioCheckPassed
-                            ? 'Your voice is reaching the microphone clearly.'
-                            : isMicTesting
-                            ? 'Speak normally to confirm your microphone level.'
-                            : 'Choose a microphone and start the live check.')}
+                          {micTestError ? (
+                            <span className="text-rose-600 font-medium">{micTestError}</span>
+                          ) : audioCheckPassed ? (
+                            'Your voice is captured clearly. The microphone is ready for the assessment.'
+                          ) : isMicTesting ? (
+                            micStatusMessage || 'Speak normally or quietly to verify your microphone.'
+                          ) : (
+                            'Choose a microphone and start the live check.'
+                          )}
                         </p>
                       </div>
 
-                      {(!isMicTesting || micTestError) && (
+                      {(!isMicTesting || micTestError || !audioCheckPassed) && (
                         <button
                           type="button"
                           onClick={() => handleStartMicTest(selectedMicId)}
-                          className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50"
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50 cursor-pointer"
                         >
                           <Volume2 className="h-3.5 w-3.5 text-blue-600" />
-                          {micTestError ? 'Try microphone again' : 'Start microphone check'}
+                          {micTestError ? 'Try microphone again' : isMicTesting ? 'Restart check' : 'Start microphone check'}
                         </button>
                       )}
                     </div>
                   </div>
 
                   {/* Check 2: Local camera and face detection */}
-                  <div className={`p-5 sm:p-6 rounded-2xl border transition-all ${cameraCheckPassed && faceCheckPassed ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950' : 'bg-slate-50/70 border-slate-200'}`}>
+                  <div className={`p-5 sm:p-6 rounded-2xl border transition-all ${cameraCheckPassed && faceCheckPassed ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950' : 'bg-white border-slate-200/90 shadow-2xs'}`}>
                     <div className="flex items-center justify-between gap-4 mb-4">
                       <div className="flex items-center gap-3">
                         <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${cameraCheckPassed && faceCheckPassed ? 'bg-emerald-600 text-white' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
@@ -1153,7 +1253,7 @@ export default function InvitationAcceptancePage() {
                           <div className="text-xs text-slate-500 mt-0.5">Camera frames are analyzed locally and are not recorded or uploaded.</div>
                         </div>
                       </div>
-                      <button type="button" onClick={handleStartCameraTest} disabled={isCameraTesting} className="shrink-0 px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                      <button type="button" onClick={handleStartCameraTest} disabled={isCameraTesting} className="shrink-0 px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60 cursor-pointer">
                         {isCameraTesting ? 'Checking…' : cameraCheckPassed ? 'Restart check' : 'Start camera'}
                       </button>
                     </div>
@@ -1174,7 +1274,7 @@ export default function InvitationAcceptancePage() {
                     className={`p-5 sm:p-6 rounded-2xl border transition-all ${
                       fullscreenCheckPassed
                         ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950'
-                        : 'bg-slate-50/70 border-slate-200'
+                        : 'bg-white border-slate-200/90 shadow-2xs'
                     }`}
                   >
                     <div className="flex items-center justify-between">
@@ -1219,7 +1319,7 @@ export default function InvitationAcceptancePage() {
                 </div>
 
                 {/* Gate Status Pill with Generous Margin */}
-                <div className="p-4 sm:p-5 rounded-2xl bg-slate-50 border border-slate-200 text-center text-xs sm:text-sm my-2">
+                <div className="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 text-center text-xs sm:text-sm my-2 shadow-2xs">
                   {isReadyForAssessment ? (
                     <span className="text-emerald-700 font-bold flex items-center justify-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
@@ -1235,7 +1335,7 @@ export default function InvitationAcceptancePage() {
               </div>
 
               {/* Bottom Action Footer */}
-              <div className="pt-6 border-t border-slate-100 flex items-center justify-between">
+              <div className="pt-6 border-t border-slate-200/80 flex items-center justify-between mt-auto">
                 <button
                   onClick={() => setCurrentStage(2)}
                   className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs sm:text-sm font-semibold transition cursor-pointer flex items-center gap-1.5"
@@ -1299,6 +1399,7 @@ export default function InvitationAcceptancePage() {
 
                   <button
                     onClick={() => {
+                      stopMicTest()
                       setCountdownValue(5)
                       setVoicePreconnectStatus('idle')
                       setVoicePreconnectError('')

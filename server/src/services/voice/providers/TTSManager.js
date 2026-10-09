@@ -111,6 +111,7 @@ export class TTSManager {
     onTextDelta = null,
     preferredProvider = null,
     timeoutMs = 60000,
+    signal = null,
   }) {
     if (!this._initialized) {
       await this.initialize()
@@ -177,6 +178,13 @@ export class TTSManager {
 
         console.log(`[TTSManager] Synthesizing speech via provider "${providerName}"...`)
         const controller = new AbortController()
+        if (signal) {
+          if (signal.aborted) {
+            controller.abort()
+            throw new Error('TTS synthesis aborted')
+          }
+          signal.addEventListener('abort', () => controller.abort(), { once: true })
+        }
         const effectiveTimeoutMs = Math.max(timeoutMs || 60000, Math.ceil(normalizedText.length * 200))
         let timer = setTimeout(() => controller.abort(), effectiveTimeoutMs)
 

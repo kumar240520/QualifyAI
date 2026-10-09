@@ -20,21 +20,66 @@ const URL_REGEX = /^(https?:\/\/)?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-
 // Allowed Seniority Levels
 export const SENIORITY_LEVELS = ['JUNIOR', 'MID', 'SENIOR', 'STAFF', 'LEAD']
 
-// Allowed Question Types
+// Allowed Foundational Background Types (Strictly Two: TECHNICAL and NON_TECHNICAL)
+export const BACKGROUND_TYPES = [
+  'TECHNICAL',
+  'NON_TECHNICAL',
+]
+
+// Allowed Question Types (15 Canonical Enterprise Formats + Specification Identifiers + Legacy Aliases)
 export const QUESTION_TYPES = [
+  'MULTIPLE_CHOICE',
+  'MULTI_SELECT',
+  'TRUE_FALSE',
+  'SHORT_ANSWER',
+  'DESCRIPTIVE',
+  'FILL_IN_THE_BLANK',
+  'CODING_CHALLENGE',
+  'PREDICT_CODE_OUTPUT',
+  'DEBUGGING',
+  'COMPLETE_THE_CODE',
+  'ARRANGE_ORDER',
+  'SELECT_MOST_APPROPRIATE',
+  'SLIDER_SCALE',
+  'MATCHING_PAIRS',
+  'NUMERICAL_APTITUDE',
+  // Canonical Specification Key Aliases (lowercase & uppercase)
+  'single_select',
+  'multi_select',
+  'true_false',
+  'short_answer',
+  'descriptive',
+  'fill_blank',
+  'coding_challenge',
+  'predict_output',
+  'debugging',
+  'complete_code',
+  'ordering',
+  'best_option',
+  'slider',
+  'matching',
+  'numerical',
+  'SINGLE_SELECT',
+  'MULTI_SELECT',
+  'FILL_BLANK',
+  'PREDICT_OUTPUT',
+  'COMPLETE_CODE',
+  'ORDERING',
+  'BEST_OPTION',
+  'SLIDER',
+  'MATCHING',
+  'NUMERICAL',
+  // Legacy & Compatibility Aliases
   'TECHNICAL',
   'SYSTEM_DESIGN',
   'PROBLEM_SOLVING',
   'BEHAVIORAL',
-  'MULTIPLE_CHOICE',
-  'MULTI_SELECT',
   'CODE_OUTPUT',
   'CODE_WRITING',
   'SQL',
-  'FILL_IN_THE_BLANK',
-  'TRUE_FALSE',
   'SCENARIO',
-  'DESCRIPTIVE',
+  'SINGLE_CHOICE',
+  'YES_NO',
 ]
 
 // Allowed Difficulties
@@ -332,6 +377,179 @@ export function validateCreateJobPayload(body) {
   if (!senRes.valid) errors.seniority = senRes.error
   else data.seniority = senRes.value
 
+  // Foundational Background Type (strictly TECHNICAL or NON_TECHNICAL)
+  const rawBg = body?.background_type || body?.backgroundType || 'TECHNICAL'
+  const normalizedBg = String(rawBg).trim().toUpperCase().replace(/[\s-]+/g, '_')
+  if (['NON_TECHNICAL', 'NONTECHNICAL', 'BUSINESS_DEVELOPMENT', 'MARKETING', 'CUSTOM'].includes(normalizedBg)) {
+    data.background_type = 'NON_TECHNICAL'
+  } else if (normalizedBg === 'TECHNICAL') {
+    data.background_type = 'TECHNICAL'
+  } else {
+    const bgRes = validateEnum(rawBg, BACKGROUND_TYPES, 'Background type', { defaultValue: 'TECHNICAL' })
+    if (!bgRes.valid) {
+      errors.background_type = bgRes.error
+    } else {
+      data.background_type = bgRes.value
+    }
+  }
+  data.custom_background = null
+
+  // Allowed Question Types
+  const rawAllowedTypes = body?.allowed_question_types || body?.allowedQuestionTypes
+  if (rawAllowedTypes !== undefined) {
+    if (!Array.isArray(rawAllowedTypes) || rawAllowedTypes.length === 0) {
+      errors.allowed_question_types = 'At least one allowed question type must be selected.'
+    } else {
+      const sanitized = rawAllowedTypes
+        .map((t) => String(t).trim())
+        .filter((t) => QUESTION_TYPES.includes(t) || QUESTION_TYPES.includes(t.toUpperCase()) || QUESTION_TYPES.includes(t.toLowerCase()))
+      if (sanitized.length === 0) {
+        errors.allowed_question_types = 'At least one valid question type must be selected.'
+      } else {
+        data.allowed_question_types = [...new Set(sanitized)]
+      }
+    }
+  } else {
+    data.allowed_question_types = ['SHORT_ANSWER', 'DESCRIPTIVE', 'MULTIPLE_CHOICE', 'SCENARIO']
+  }
+
+  // Custom Question Options / Types (Addition 1)
+  const rawCustomTypes = body?.custom_question_types || body?.customQuestionTypes
+  if (Array.isArray(rawCustomTypes)) {
+    const validCustom = rawCustomTypes
+      .map((t) => String(t).trim())
+      .filter((t) => t.length >= 2 && t.length <= 60)
+    data.custom_question_types = [...new Set(validCustom)]
+  } else {
+    data.custom_question_types = []
+  }
+
+  // Ask About Projects / Relevant Experience
+  const rawProjects = body?.ask_about_projects ?? body?.askAboutProjects
+  if (rawProjects !== undefined) {
+    data.ask_about_projects = Boolean(rawProjects)
+  } else {
+    data.ask_about_projects = data.background_type === 'TECHNICAL'
+  }
+
+  // Opening Question (Optional customizable first question)
+  const rawOpening = body?.opening_question || body?.openingQuestion
+  if (rawOpening) {
+    const openingRes = validateText(rawOpening, 'Opening question', { min: 5, max: 2000, required: false })
+    if (!openingRes.valid) errors.opening_question = openingRes.error
+    else data.opening_question = openingRes.value
+  } else {
+    data.opening_question = null
+  }
+
+  // Target Difficulty
+  const diffRes = validateEnum(body?.target_difficulty || body?.targetDifficulty || 'MEDIUM', DIFFICULTY_LEVELS, 'Target difficulty', { defaultValue: 'MEDIUM' })
+  if (!diffRes.valid) errors.target_difficulty = diffRes.error
+  else data.target_difficulty = diffRes.value
+
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+    data,
+  }
+}
+
+/**
+ * Validate Job Requisition Update Payload
+ */
+export function validateUpdateJobPayload(body) {
+  const errors = {}
+  const data = {}
+
+  if (body?.title !== undefined) {
+    const titleRes = validateText(body.title, 'Job title', { min: 3, max: 200, required: true })
+    if (!titleRes.valid) errors.title = titleRes.error
+    else data.title = titleRes.value
+  }
+
+  if (body?.description !== undefined) {
+    const descRes = validateText(body.description, 'Job description', { min: 20, max: 50000, required: true })
+    if (!descRes.valid) errors.description = descRes.error
+    else data.description = descRes.value
+  }
+
+  if (body?.department !== undefined) {
+    const deptRes = validateText(body.department, 'Department', { min: 2, max: 100, required: false })
+    data.department = deptRes.value || 'Engineering'
+  }
+
+  if (body?.seniority !== undefined) {
+    const senRes = validateEnum(body.seniority, SENIORITY_LEVELS, 'Seniority level', { defaultValue: 'MID' })
+    if (!senRes.valid) errors.seniority = senRes.error
+    else data.seniority = senRes.value
+  }
+
+  if (body?.background_type !== undefined || body?.backgroundType !== undefined) {
+    const rawBg = body.background_type || body.backgroundType
+    const normalizedBg = String(rawBg).trim().toUpperCase().replace(/[\s-]+/g, '_')
+    if (['NON_TECHNICAL', 'NONTECHNICAL', 'BUSINESS_DEVELOPMENT', 'MARKETING', 'CUSTOM'].includes(normalizedBg)) {
+      data.background_type = 'NON_TECHNICAL'
+    } else if (normalizedBg === 'TECHNICAL') {
+      data.background_type = 'TECHNICAL'
+    } else {
+      const bgRes = validateEnum(rawBg, BACKGROUND_TYPES, 'Background type')
+      if (!bgRes.valid) errors.background_type = bgRes.error
+      else data.background_type = bgRes.value
+    }
+    data.custom_background = null
+  }
+
+  const rawAllowed = body?.allowed_question_types ?? body?.allowedQuestionTypes
+  if (rawAllowed !== undefined) {
+    if (!Array.isArray(rawAllowed) || rawAllowed.length === 0) {
+      errors.allowed_question_types = 'At least one allowed question type must be selected.'
+    } else {
+      const sanitized = rawAllowed
+        .map((t) => String(t).trim())
+        .filter((t) => QUESTION_TYPES.includes(t) || QUESTION_TYPES.includes(t.toUpperCase()) || QUESTION_TYPES.includes(t.toLowerCase()))
+      if (sanitized.length === 0) {
+        errors.allowed_question_types = 'At least one valid question type must be selected.'
+      } else {
+        data.allowed_question_types = [...new Set(sanitized)]
+      }
+    }
+  }
+
+  const rawCustomQ = body?.custom_question_types ?? body?.customQuestionTypes
+  if (rawCustomQ !== undefined) {
+    if (Array.isArray(rawCustomQ)) {
+      const validCustom = rawCustomQ
+        .map((t) => String(t).trim())
+        .filter((t) => t.length >= 2 && t.length <= 60)
+      data.custom_question_types = [...new Set(validCustom)]
+    } else {
+      data.custom_question_types = []
+    }
+  }
+
+  const rawProjects = body?.ask_about_projects ?? body?.askAboutProjects
+  if (rawProjects !== undefined) {
+    data.ask_about_projects = Boolean(rawProjects)
+  }
+
+  const rawOpening = body?.opening_question ?? body?.openingQuestion
+  if (rawOpening !== undefined) {
+    if (rawOpening === null || rawOpening === '') {
+      data.opening_question = null
+    } else {
+      const openRes = validateText(rawOpening, 'Opening question', { min: 5, max: 2000, required: false })
+      if (!openRes.valid) errors.opening_question = openRes.error
+      else data.opening_question = openRes.value
+    }
+  }
+
+  const rawDiff = body?.target_difficulty ?? body?.targetDifficulty
+  if (rawDiff !== undefined) {
+    const diffRes = validateEnum(rawDiff, DIFFICULTY_LEVELS, 'Target difficulty')
+    if (!diffRes.valid) errors.target_difficulty = diffRes.error
+    else data.target_difficulty = diffRes.value
+  }
+
   return {
     valid: Object.keys(errors).length === 0,
     errors,
@@ -463,10 +681,22 @@ export function validateAnswerSubmissionPayload(body) {
   if (!tokenRes.valid) errors.token = tokenRes.error
   else data.token = tokenRes.value
 
-  const ansRes = validateText(body?.answerText, 'Candidate response', { min: 1, max: 12000, required: true })
+  const structuredAnswer = body?.structuredAnswer || body?.payload || null
+  let rawAnswer = body?.answerText
+
+  if ((rawAnswer == null || String(rawAnswer).trim() === '') && structuredAnswer) {
+    if (typeof structuredAnswer === 'string') {
+      rawAnswer = structuredAnswer
+    } else if (typeof structuredAnswer === 'object') {
+      rawAnswer = structuredAnswer.text || structuredAnswer.label || (typeof structuredAnswer.numericValue === 'number' ? String(structuredAnswer.numericValue) : '') || JSON.stringify(structuredAnswer)
+    }
+  }
+
+  const ansRes = validateText(rawAnswer, 'Candidate response', { min: 1, max: 12000, required: true })
   if (!ansRes.valid) errors.answerText = 'Please provide an answer before submitting.'
   else data.answerText = ansRes.value
 
+  data.structuredAnswer = structuredAnswer
   data.questionId = body?.questionId ? String(body.questionId).trim() : null
   data.questionSequence = typeof body?.questionSequence === 'number' ? body.questionSequence : undefined
   data.inputMethod = body?.inputMethod ? String(body.inputMethod).trim() : 'text'

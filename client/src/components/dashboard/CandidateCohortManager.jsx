@@ -20,6 +20,8 @@ import {
   Calendar,
   Award,
   Lock,
+  Trash2,
+  X,
 } from 'lucide-react'
 import { candidateService } from '../../services/candidateService.js'
 import { jobService } from '../../services/jobService.js'
@@ -36,6 +38,11 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('ALL')
   const [copiedTokenId, setCopiedTokenId] = useState(null)
+
+  // Candidate Deletion State (Requirement 4)
+  const [candidateToDelete, setCandidateToDelete] = useState(null)
+  const [isDeletingCandidate, setIsDeletingCandidate] = useState(false)
+  const [candidateDeleteError, setCandidateDeleteError] = useState('')
 
   // Evaluation Scorecard Modal State
   const [evalModalState, setEvalModalState] = useState({
@@ -57,11 +64,14 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
 
   // Invite Modal State
   const [showInviteModal, setShowInviteModal] = useState(false)
+  const [targetCandidateId, setTargetCandidateId] = useState(null)
   const [inviteName, setInviteName] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
   const [invitePhone, setInvitePhone] = useState('')
   const [inviteExpiryDays, setInviteExpiryDays] = useState(7)
   const [inviteDurationMinutes, setInviteDurationMinutes] = useState(30)
+  const [isCustomDuration, setIsCustomDuration] = useState(false)
+  const [customDurationMinutes, setCustomDurationMinutes] = useState(45)
   const [isSubmittingInvite, setIsSubmittingInvite] = useState(false)
   const [inviteModalError, setInviteModalError] = useState('')
   const [inviteFieldErrors, setInviteFieldErrors] = useState({})
@@ -216,46 +226,83 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
     setTimeout(() => setCopiedTokenId(null), 2500)
   }
 
+  // Open invite modal pre-configured for an existing candidate
+  const handleOpenInviteForCandidate = (candidate) => {
+    if (!candidate) return
+    setTargetCandidateId(candidate.id)
+    setInviteName(candidate.full_name || candidate.fullName || '')
+    setInviteEmail(candidate.email || '')
+    setInvitePhone(candidate.phone || '')
+    setInviteExpiryDays(7)
+    setInviteDurationMinutes(30)
+    setIsCustomDuration(false)
+    setCustomDurationMinutes(45)
+    setInviteModalError('')
+    setInviteFieldErrors({})
+    setGeneratedInviteLink('')
+    setShowInviteModal(true)
+  }
+
   // Handle creating candidate and issuing invitation
   const handleSendInvite = async (e) => {
     e.preventDefault()
-
-    const validation = validateAddCandidate({
-      fullName: inviteName,
-      email: inviteEmail,
-      phone: invitePhone,
-    })
-
-    if (!validation.isValid) {
-      setInviteFieldErrors(validation.errors)
-      setInviteModalError('Please correct the highlighted candidate fields.')
-      return
-    }
 
     if (!activeJobId) {
       setInviteModalError('Please select a job requisition before issuing an invitation.')
       return
     }
 
-    // 1. Proactive cohort duplicate check
-    const cleanEmail = inviteEmail.trim().toLowerCase()
-    const duplicateCandidate = candidates.find(
-      (c) => c.email && c.email.trim().toLowerCase() === cleanEmail
-    )
-    if (duplicateCandidate) {
-      const isAccepted = isCandidateAccepted(duplicateCandidate)
-      const isCompleted = isCandidateCompleted(duplicateCandidate)
-      let msg = 'This candidate email is already registered for this job requisition.'
-      if (isCompleted) {
-        msg = 'This candidate has already completed their assessment for this requisition.'
-      } else if (isAccepted) {
-        msg = 'This candidate has already accepted their invitation for this requisition.'
-      } else if (duplicateCandidate.invitation) {
-        msg = 'An active invitation has already been issued for this candidate email.'
+    // Determine and validate effective duration
+    let effectiveDuration = Number(inviteDurationMinutes) || 30
+    if (isCustomDuration) {
+      const customNum = Number(customDurationMinutes)
+      if (!customNum || isNaN(customNum) || customNum < 5 || customNum > 180) {
+        setInviteFieldErrors((prev) => ({
+          ...prev,
+          duration: 'Please enter a custom duration between 5 and 180 minutes.',
+        }))
+        setInviteModalError('Please specify a valid custom time limit (5–180 minutes).')
+        return
       }
-      setInviteFieldErrors({ email: msg })
-      setInviteModalError(msg)
-      return
+      effectiveDuration = Math.round(customNum)
+    }
+
+    let candidateId = targetCandidateId
+
+    // Only validate candidate fields if adding a new candidate
+    if (!candidateId) {
+      const validation = validateAddCandidate({
+        fullName: inviteName,
+        email: inviteEmail,
+        phone: invitePhone,
+      })
+
+      if (!validation.isValid) {
+        setInviteFieldErrors(validation.errors)
+        setInviteModalError('Please correct the highlighted candidate fields.')
+        return
+      }
+
+      // Proactive cohort duplicate check
+      const cleanEmail = inviteEmail.trim().toLowerCase()
+      const duplicateCandidate = candidates.find(
+        (c) => c.email && c.email.trim().toLowerCase() === cleanEmail
+      )
+      if (duplicateCandidate) {
+        const isAccepted = isCandidateAccepted(duplicateCandidate)
+        const isCompleted = isCandidateCompleted(duplicateCandidate)
+        let msg = 'This candidate email is already registered for this job requisition.'
+        if (isCompleted) {
+          msg = 'This candidate has already completed their assessment for this requisition.'
+        } else if (isAccepted) {
+          msg = 'This candidate has already accepted their invitation for this requisition.'
+        } else if (duplicateCandidate.invitation) {
+          msg = 'An active invitation has already been issued for this candidate email.'
+        }
+        setInviteFieldErrors({ email: msg })
+        setInviteModalError(msg)
+        return
+      }
     }
 
     setInviteFieldErrors({})
@@ -263,25 +310,28 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
     setIsSubmittingInvite(true)
 
     try {
-      // 2. Add candidate
-      const candidate = await candidateService.addCandidate(activeJobId, {
-        fullName: inviteName.trim(),
-        email: cleanEmail,
-        phone: invitePhone.trim() || null,
-      })
+      if (!candidateId) {
+        // Add candidate record
+        const candidate = await candidateService.addCandidate(activeJobId, {
+          fullName: inviteName.trim(),
+          email: inviteEmail.trim().toLowerCase(),
+          phone: invitePhone.trim() || null,
+        })
+        candidateId = candidate.id
+      }
 
-      // 3. Generate secure tokenized invitation
+      // Generate secure tokenized invitation with chosen duration (preset or custom)
       const invitation = await candidateService.createInvitation(
         activeJobId,
-        candidate.id,
+        candidateId,
         Number(inviteExpiryDays) || 7,
-        Number(inviteDurationMinutes) || 30
+        effectiveDuration
       )
 
       const origin = window.location.origin
       setGeneratedInviteLink(`${origin}/invite/${invitation.token}`)
 
-      // Refresh list
+      cohortCacheRef.current.delete(activeJobId)
       fetchCandidates(activeJobId)
     } catch (err) {
       console.error('Error inviting candidate:', err)
@@ -299,12 +349,40 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
 
   const resetModalState = () => {
     setShowInviteModal(false)
+    setTargetCandidateId(null)
     setInviteName('')
     setInviteEmail('')
     setInvitePhone('')
+    setInviteExpiryDays(7)
+    setInviteDurationMinutes(30)
+    setIsCustomDuration(false)
+    setCustomDurationMinutes(45)
     setInviteModalError('')
     setInviteFieldErrors({})
     setGeneratedInviteLink('')
+  }
+
+  const handleOpenDeleteCandidate = (candidate) => {
+    setCandidateToDelete(candidate)
+    setCandidateDeleteError('')
+  }
+
+  const handleConfirmDeleteCandidate = async () => {
+    if (!candidateToDelete || !activeJobId) return
+    setIsDeletingCandidate(true)
+    setCandidateDeleteError('')
+    try {
+      await candidateService.deleteCandidate(activeJobId, candidateToDelete.id)
+      setCandidateToDelete(null)
+      cohortCacheRef.current.delete(activeJobId)
+      await fetchCandidates(activeJobId, true)
+    } catch (err) {
+      console.error('Candidate deletion error:', err)
+      const norm = normalizeApiError(err, 'Failed to delete candidate.')
+      setCandidateDeleteError(norm.message)
+    } finally {
+      setIsDeletingCandidate(false)
+    }
   }
 
   return (
@@ -730,20 +808,20 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
                             </a>
                           ) : (
                             <button
-                              onClick={async () => {
-                                try {
-                                  await candidateService.createInvitation(activeJobId, c.id, 7, inviteDurationMinutes)
-                                  cohortCacheRef.current.delete(activeJobId)
-                                  fetchCandidates(activeJobId)
-                                } catch (e) {
-                                  setError(e.message)
-                                }
-                              }}
+                              onClick={() => handleOpenInviteForCandidate(c)}
                               className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-semibold transition cursor-pointer"
                             >
                               Issue Invite
                             </button>
                           )}
+                          {/* Delete Candidate Action (Requirement 4) */}
+                          <button
+                            onClick={() => handleOpenDeleteCandidate(c)}
+                            className="p-1.5 rounded-lg border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-200 hover:bg-red-50 text-[11px] font-semibold transition cursor-pointer"
+                            title="Delete Candidate"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -758,20 +836,26 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
       {/* Invite Candidate Modal */}
       {showInviteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-5">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
                   <UserPlus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Invite Candidate</h3>
-                  <p className="text-xs text-slate-500">Issue secure tokenized assessment link</p>
+                  <h3 className="text-base font-bold text-slate-900">
+                    {targetCandidateId ? 'Set Up Interview Room' : 'Invite Candidate'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {targetCandidateId
+                      ? `Configure time limit and generate room for ${inviteName}`
+                      : 'Issue secure tokenized assessment link'}
+                  </p>
                 </div>
               </div>
               <button
                 onClick={resetModalState}
-                className="text-slate-400 hover:text-slate-600 text-sm font-semibold p-1"
+                className="text-slate-400 hover:text-slate-600 text-sm font-semibold p-1 cursor-pointer"
               >
                 ✕
               </button>
@@ -782,15 +866,15 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
                 <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 space-y-2">
                   <div className="flex items-center gap-2 font-bold text-xs text-emerald-900">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>Invitation Successfully Generated!</span>
+                    <span>Interview Room Successfully Generated!</span>
                   </div>
                   <p className="text-[11px] text-emerald-700 leading-relaxed">
-                    Share this unique entrance link with <strong>{inviteName}</strong>. The candidate will be guided through microphone setup and enter the AI interview.
+                    Share this unique entrance link with <strong>{inviteName}</strong>. The candidate will enter the interview room with an authoritative time limit of <strong>{isCustomDuration ? `${customDurationMinutes} minutes (custom)` : `${inviteDurationMinutes} minutes`}</strong>.
                   </p>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Tokenized Link</label>
+                  <label className="text-xs font-semibold text-slate-700">Tokenized Interview Room Link</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
@@ -839,108 +923,257 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
                   </div>
                 )}
 
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Full Name <span className="text-red-500">*</span></label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Sarah Connor"
-                    value={inviteName}
-                    onChange={(e) => {
-                      setInviteName(e.target.value)
-                      if (inviteFieldErrors.fullName) {
-                        setInviteFieldErrors((prev) => ({ ...prev, fullName: null }))
-                      }
-                    }}
-                    className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
-                      inviteFieldErrors.fullName
-                        ? 'border-red-400 ring-2 ring-red-400/20'
-                        : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
-                    }`}
-                  />
-                  {inviteFieldErrors.fullName && (
-                    <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.fullName}</p>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Email Address <span className="text-red-500">*</span></label>
-                  <input
-                    type="email"
-                    required
-                    placeholder="sarah@example.com"
-                    value={inviteEmail}
-                    onChange={(e) => {
-                      setInviteEmail(e.target.value)
-                      if (inviteFieldErrors.email) {
-                        setInviteFieldErrors((prev) => ({ ...prev, email: null }))
-                      }
-                      if (inviteModalError) {
-                        setInviteModalError('')
-                      }
-                    }}
-                    className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
-                      inviteFieldErrors.email
-                        ? 'border-red-400 ring-2 ring-red-400/20'
-                        : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
-                    }`}
-                  />
-                  {inviteFieldErrors.email && (
-                    <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.email}</p>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-700">Phone (Optional)</label>
-                    <input
-                      type="tel"
-                      placeholder="+1 (555) 000-0000"
-                      value={invitePhone}
-                      onChange={(e) => {
-                        setInvitePhone(e.target.value)
-                        if (inviteFieldErrors.phone) {
-                          setInviteFieldErrors((prev) => ({ ...prev, phone: null }))
-                        }
-                      }}
-                      className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
-                        inviteFieldErrors.phone
-                          ? 'border-red-400 ring-2 ring-red-400/20'
-                          : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
-                      }`}
-                    />
-                    {inviteFieldErrors.phone && (
-                      <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.phone}</p>
-                    )}
+                {targetCandidateId ? (
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Target Candidate</span>
+                      <p className="text-xs font-bold text-slate-900">{inviteName}</p>
+                      <p className="text-[11px] text-slate-500">{inviteEmail}</p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold">
+                      Selected Candidate
+                    </span>
                   </div>
+                ) : (
+                  <>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700">Full Name <span className="text-red-500">*</span></label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Sarah Connor"
+                        value={inviteName}
+                        onChange={(e) => {
+                          setInviteName(e.target.value)
+                          if (inviteFieldErrors.fullName) {
+                            setInviteFieldErrors((prev) => ({ ...prev, fullName: null }))
+                          }
+                        }}
+                        className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
+                          inviteFieldErrors.fullName
+                            ? 'border-red-400 ring-2 ring-red-400/20'
+                            : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                        }`}
+                      />
+                      {inviteFieldErrors.fullName && (
+                        <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.fullName}</p>
+                      )}
+                    </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-700">Link Validity</label>
-                    <select
-                      value={inviteExpiryDays}
-                      onChange={(e) => setInviteExpiryDays(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
-                    >
-                      <option value="3">3 Days</option>
-                      <option value="7">7 Days (Standard)</option>
-                      <option value="14">14 Days</option>
-                    </select>
-                  </div>
-                </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700">Email Address <span className="text-red-500">*</span></label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="sarah@example.com"
+                        value={inviteEmail}
+                        onChange={(e) => {
+                          setInviteEmail(e.target.value)
+                          if (inviteFieldErrors.email) {
+                            setInviteFieldErrors((prev) => ({ ...prev, email: null }))
+                          }
+                          if (inviteModalError) {
+                            setInviteModalError('')
+                          }
+                        }}
+                        className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
+                          inviteFieldErrors.email
+                            ? 'border-red-400 ring-2 ring-red-400/20'
+                            : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                        }`}
+                      />
+                      {inviteFieldErrors.email && (
+                        <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.email}</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-700">Phone (Optional)</label>
+                      <input
+                        type="tel"
+                        placeholder="+1 (555) 000-0000"
+                        value={invitePhone}
+                        onChange={(e) => {
+                          setInvitePhone(e.target.value)
+                          if (inviteFieldErrors.phone) {
+                            setInviteFieldErrors((prev) => ({ ...prev, phone: null }))
+                          }
+                        }}
+                        className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 transition ${
+                          inviteFieldErrors.phone
+                            ? 'border-red-400 ring-2 ring-red-400/20'
+                            : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                        }`}
+                      />
+                      {inviteFieldErrors.phone && (
+                        <p className="mt-1 text-xs text-red-600 font-medium">{inviteFieldErrors.phone}</p>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Interview Duration</label>
+                  <label className="text-xs font-semibold text-slate-700">Link Validity</label>
                   <select
-                    value={inviteDurationMinutes}
-                    onChange={(e) => setInviteDurationMinutes(Number(e.target.value))}
+                    value={inviteExpiryDays}
+                    onChange={(e) => setInviteExpiryDays(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
                   >
-                    <option value={15}>15 minutes</option>
-                    <option value={20}>20 minutes</option>
-                    <option value={30}>30 minutes</option>
-                    <option value={45}>45 minutes</option>
-                    <option value={60}>60 minutes</option>
+                    <option value="3">3 Days</option>
+                    <option value="7">7 Days (Standard)</option>
+                    <option value="14">14 Days</option>
+                    <option value="30">30 Days</option>
                   </select>
+                </div>
+
+                {/* Interview Duration & Custom Time Limit Section */}
+                <div className="space-y-2 pt-1 border-t border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Interview Duration</span>
+                    </label>
+                    <span className="text-[11px] font-bold text-blue-600 bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded-full">
+                      {isCustomDuration
+                        ? `${Number(customDurationMinutes) || 0} mins (Custom Limit)`
+                        : `${inviteDurationMinutes} minutes`}
+                    </span>
+                  </div>
+
+                  {/* Time Limit Button Options (Quick Presets + Custom Button) */}
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                    {[15, 20, 30, 45, 60].map((mins) => {
+                      const isSelected = !isCustomDuration && inviteDurationMinutes === mins
+                      return (
+                        <button
+                          key={mins}
+                          type="button"
+                          onClick={() => {
+                            setIsCustomDuration(false)
+                            setInviteDurationMinutes(mins)
+                            if (inviteFieldErrors.duration) {
+                              setInviteFieldErrors((prev) => ({ ...prev, duration: null }))
+                            }
+                          }}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition border cursor-pointer ${
+                            isSelected
+                              ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                              : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          {mins}m
+                        </button>
+                      )
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCustomDuration(true)
+                      }}
+                      className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition border cursor-pointer flex items-center justify-center gap-1 ${
+                        isCustomDuration
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                          : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                      }`}
+                      title="Choose your own custom time limit"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-400" />
+                      <span>Custom</span>
+                    </button>
+                  </div>
+
+                  {/* Dropdown with Custom Option */}
+                  <select
+                    value={isCustomDuration ? 'custom' : inviteDurationMinutes}
+                    onChange={(e) => {
+                      if (e.target.value === 'custom') {
+                        setIsCustomDuration(true)
+                      } else {
+                        setIsCustomDuration(false)
+                        setInviteDurationMinutes(Number(e.target.value))
+                        if (inviteFieldErrors.duration) {
+                          setInviteFieldErrors((prev) => ({ ...prev, duration: null }))
+                        }
+                      }
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+                  >
+                    <option value={15}>15 minutes (Quick Screen)</option>
+                    <option value={20}>20 minutes (Standard Technical)</option>
+                    <option value={30}>30 minutes (Deep Dive — Recommended)</option>
+                    <option value={45}>45 minutes (Comprehensive Assessment)</option>
+                    <option value={60}>60 minutes (Architectural / Lead Session)</option>
+                    <option value="custom">Custom Time Limit...</option>
+                  </select>
+
+                  {/* Custom Time Limit Input Panel */}
+                  {isCustomDuration && (
+                    <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200 space-y-2 animate-in fade-in slide-in-from-top-1 duration-150">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-blue-900 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Custom Time Limit</span>
+                        </label>
+                        <span className="text-[10px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                          5 to 180 minutes
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <input
+                            type="number"
+                            min={5}
+                            max={180}
+                            step={1}
+                            placeholder="e.g. 25, 40, 75, 90"
+                            value={customDurationMinutes}
+                            onChange={(e) => {
+                              setCustomDurationMinutes(e.target.value)
+                              if (inviteFieldErrors.duration) {
+                                setInviteFieldErrors((prev) => ({ ...prev, duration: null }))
+                              }
+                            }}
+                            className={`w-full px-3.5 py-2 pr-14 bg-white border rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 transition ${
+                              inviteFieldErrors.duration
+                                ? 'border-red-400 ring-2 ring-red-400/20'
+                                : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
+                            }`}
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400 pointer-events-none">
+                            mins
+                          </span>
+                        </div>
+
+                        {/* Quick Presets for Custom Duration */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {[25, 40, 50, 75, 90].map((quick) => (
+                            <button
+                              key={quick}
+                              type="button"
+                              onClick={() => {
+                                setCustomDurationMinutes(quick)
+                                if (inviteFieldErrors.duration) {
+                                  setInviteFieldErrors((prev) => ({ ...prev, duration: null }))
+                                }
+                              }}
+                              className="px-2 py-1.5 rounded-lg bg-white border border-blue-200 hover:border-blue-300 hover:bg-blue-50 text-[11px] font-medium text-blue-700 transition cursor-pointer"
+                            >
+                              {quick}m
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {inviteFieldErrors.duration ? (
+                        <p className="text-xs text-red-600 font-medium">{inviteFieldErrors.duration}</p>
+                      ) : (
+                        <p className="text-[11px] text-slate-600 leading-relaxed">
+                          The interview room will run for <strong>{Number(customDurationMinutes) || 0} minutes</strong>. The final 60 seconds are reserved exclusively for candidate feedback.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-2.5">
@@ -1000,6 +1233,66 @@ export default function CandidateCohortManager({ selectedJob, onSelectJob, onNav
           }
         }}
       />
+
+      {/* Candidate Deletion Confirmation Modal (Requirement 4: Simple popup, NO typing DELETE) */}
+      {candidateToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md">
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-semibold text-slate-900">Delete Candidate</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Are you sure you want to delete <span className="font-semibold text-slate-800">{candidateToDelete.full_name}</span>?
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setCandidateToDelete(null)
+                  setCandidateDeleteError('')
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              Are you sure you want to delete this candidate? This action may remove or affect associated candidate data.
+            </p>
+
+            {candidateDeleteError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
+                {candidateDeleteError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCandidateToDelete(null)
+                  setCandidateDeleteError('')
+                }}
+                disabled={isDeletingCandidate}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-medium hover:bg-slate-50 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteCandidate}
+                disabled={isDeletingCandidate}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-xs disabled:opacity-50 transition flex items-center gap-1.5 cursor-pointer"
+              >
+                {isDeletingCandidate ? 'Deleting...' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -29,6 +29,7 @@ export default function VoiceOrbVisualizer({
   onOpenConversation,
   unreadTurnsCount = 0,
   silenceNudgeText = null,
+  contained = false,
 }) {
   const canvasRef = useRef(null)
 
@@ -183,9 +184,17 @@ export default function VoiceOrbVisualizer({
   const currentDescriptor = stateConfig[conversationState] || stateConfig.LISTENING
 
   return (
-    <div className="flex flex-col items-center justify-between p-5 rounded-3xl bg-white border border-slate-200/90 shadow-2xs relative overflow-hidden h-full min-h-[440px]">
+    <div
+      className={
+        contained
+          ? 'flex flex-col items-center justify-between w-full h-full relative z-10'
+          : 'flex flex-col items-center justify-between p-4 sm:p-5 rounded-3xl bg-white border border-slate-200/90 shadow-2xs relative overflow-hidden h-full min-h-[320px] sm:min-h-[360px]'
+      }
+    >
       {/* Background ambient lighting */}
-      <div className="absolute inset-0 bg-gradient-to-b from-blue-50/40 via-indigo-50/15 to-white pointer-events-none" />
+      {!contained && (
+        <div className="absolute inset-0 bg-gradient-to-b from-blue-50/40 via-indigo-50/15 to-white pointer-events-none" />
+      )}
 
       {/* Top Presence Badge with Clean Sans Typography & Balanced Letter Spacing */}
       <div className="w-full flex items-center justify-between z-10">
@@ -217,13 +226,13 @@ export default function VoiceOrbVisualizer({
       </div>
 
       {/* Central Interactive Orb */}
-      <div className="relative flex flex-col items-center justify-center my-4 z-10">
+      <div className="relative flex flex-col items-center justify-center my-auto py-1 z-10">
         <div className="relative flex items-center justify-center">
           <canvas
             ref={canvasRef}
             width={280}
             height={280}
-            className="w-56 h-56 sm:w-64 sm:h-64"
+            className="w-48 h-48 sm:w-56 sm:h-56"
           />
 
           {/* Center Floating Icon Badge */}

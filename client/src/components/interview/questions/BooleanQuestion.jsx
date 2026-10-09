@@ -77,10 +77,10 @@ export default function BooleanQuestion({
           >
             <Check className="w-5 h-5 stroke-[2.5]" />
           </div>
-          <span className="font-heading font-extrabold text-sm sm:text-base tracking-wide">
+          <span className="font-heading font-bold text-base sm:text-lg tracking-wide">
             {trueLabel}
           </span>
-          <span className="text-[10px] font-mono text-slate-400">
+          <span className="text-[11px] font-mono text-slate-400">
             Press {trueLabel[0]} or click
           </span>
         </button>
@@ -105,7 +105,7 @@ export default function BooleanQuestion({
           >
             <X className="w-5 h-5 stroke-[2.5]" />
           </div>
-          <span className="font-heading font-extrabold text-sm sm:text-base tracking-wide">
+          <span className="font-heading font-bold text-base sm:text-lg tracking-wide">
             {falseLabel}
           </span>
           <span className="text-[10px] font-mono text-slate-400">

@@ -20,11 +20,11 @@ export const interviewService = {
   /**
    * Submit candidate's answer for the current question
    */
-  async submitAnswer(interviewId, token, answerText, questionSequence, questionId, inputMethod = 'VOICE') {
+  async submitAnswer(interviewId, token, answerText, questionSequence, questionId, inputMethod = 'VOICE', structuredAnswer = null) {
     const res = await fetch(`${API_BASE_URL}/interviews/${interviewId}/answer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, answerText, questionSequence, questionId, inputMethod }),
+      body: JSON.stringify({ token, answerText, questionSequence, questionId, inputMethod, structuredAnswer }),
     })
     const data = await res.json()
     if (!res.ok || !data.success) {

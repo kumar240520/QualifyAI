@@ -67,18 +67,102 @@ export const jobService = {
   },
 
   /**
-   * Create a new job requisition
+   * Create a new job requisition with background, question types, projects toggle, and difficulty
    */
-  async createJob({ title, description, department = 'Engineering', seniority = 'SENIOR' }) {
+  async createJob(payload) {
     const headers = await getAuthHeaders()
     const res = await fetch(`${API_BASE_URL}/jobs`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ title, description, department, seniority }),
+      body: JSON.stringify(payload),
     })
     const data = await res.json()
     if (!res.ok || !data.success) {
       throw new Error(extractErrorMessage(data, 'Failed to create job requisition.'))
+    }
+    return data.data
+  },
+
+  /**
+   * Update an existing job requisition
+   */
+  async updateJob(id, payload) {
+    const headers = await getAuthHeaders()
+    const res = await fetch(`${API_BASE_URL}/jobs/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) {
+      throw new Error(extractErrorMessage(data, 'Failed to update job requisition.'))
+    }
+    return data.data
+  },
+
+  /**
+   * Delete / archive a job requisition (Requirement 3)
+   */
+  async deleteJob(id) {
+    const headers = await getAuthHeaders()
+    const res = await fetch(`${API_BASE_URL}/jobs/${id}`, {
+      method: 'DELETE',
+      headers,
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) {
+      throw new Error(extractErrorMessage(data, 'Failed to delete job requisition.'))
+    }
+    return data.data || data
+  },
+
+  /**
+   * Update opening question for a job requisition (Requirement 8)
+   */
+  async updateOpeningQuestion(id, openingQuestion) {
+    const headers = await getAuthHeaders()
+    const res = await fetch(`${API_BASE_URL}/jobs/${id}/opening-question`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ opening_question: openingQuestion }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) {
+      throw new Error(extractErrorMessage(data, 'Failed to update opening question.'))
+    }
+    return data.data
+  },
+
+  /**
+   * Update target difficulty for a job requisition (Requirement 9)
+   */
+  async updateDifficulty(id, difficulty) {
+    const headers = await getAuthHeaders()
+    const res = await fetch(`${API_BASE_URL}/jobs/${id}/difficulty`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ target_difficulty: difficulty }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) {
+      throw new Error(extractErrorMessage(data, 'Failed to update target difficulty.'))
+    }
+    return data.data
+  },
+
+  /**
+   * Update a specific question in the pool
+   */
+  async updateQuestion(jobId, questionId, questionData) {
+    const headers = await getAuthHeaders()
+    const res = await fetch(`${API_BASE_URL}/jobs/${jobId}/questions/${questionId}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(questionData),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) {
+      throw new Error(extractErrorMessage(data, 'Failed to update question.'))
     }
     return data.data
   },
